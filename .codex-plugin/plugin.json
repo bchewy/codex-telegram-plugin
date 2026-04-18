@@ -19,6 +19,7 @@
     ],
     "brandColor": "#229ED9",
     "composerIcon": "./assets/icon.svg",
-    "logo": "./assets/logo.svg"
+    "logo": "./assets/logo.svg",
+    "screenshots": ["./assets/telegram-plugin-page.png"]
   }
 }
