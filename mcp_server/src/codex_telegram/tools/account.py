@@ -6,6 +6,7 @@ from telethon import functions, utils as tg_utils
 
 from ..client import disconnect_client, get_client, with_flood_wait
 from ..helpers import user_to_dict
+from ..safety import require_destructive
 from ..session_store import clear_session
 
 
@@ -38,8 +39,9 @@ def register(mcp) -> None:
 
     @mcp.tool()
     @with_flood_wait
-    async def logout() -> dict:
+    async def logout(confirm: bool = False) -> dict:
         """Log out from Telegram and clear the persisted session."""
+        require_destructive("logout", confirm)
         client = await get_client()
         await client.log_out()
         await disconnect_client()

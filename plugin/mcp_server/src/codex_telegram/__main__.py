@@ -9,6 +9,12 @@ from .server import run_server
 from .session_store import clear_session, describe_storage
 
 
+def _redact_phone(phone: str | None) -> str | None:
+    if not phone or len(phone) < 5:
+        return phone
+    return phone[:3] + "*" * (len(phone) - 5) + phone[-2:]
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="codex-telegram",
@@ -22,16 +28,10 @@ def build_parser() -> argparse.ArgumentParser:
     login.add_argument("--api-id", type=int, default=None)
     login.add_argument("--api-hash", default=None)
     login.add_argument("--phone", default=None)
-    login.add_argument(
-        "--master-key",
-        default=None,
-        help="Used only if the OS keyring is unavailable and an encrypted file fallback is needed.",
-    )
 
     subparsers.add_parser("whoami", help="Print the currently stored Telegram account.")
 
-    logout = subparsers.add_parser("logout", help="Clear the stored Telegram session.")
-    logout.add_argument("--master-key", default=None)
+    subparsers.add_parser("logout", help="Clear the stored Telegram session.")
 
     subparsers.add_parser("storage", help="Describe the current credential storage backend.")
     return parser
@@ -46,22 +46,43 @@ def main() -> None:
         return
 
     if args.command == "login":
-        asyncio.run(
+        result = asyncio.run(
             login_interactive(
                 api_id=args.api_id,
                 api_hash=args.api_hash,
                 phone=args.phone,
-                master_key=args.master_key,
+            )
+        )
+        print(
+            json.dumps(
+                {
+                    "ok": result["ok"],
+                    "storage": result["storage"],
+                    "user_id": result["user_id"],
+                    "username": result["username"],
+                    "display_name": result["display_name"],
+                    "phone": _redact_phone(result.get("phone")),
+                }
             )
         )
         return
 
     if args.command == "whoami":
-        asyncio.run(whoami_interactive())
+        result = asyncio.run(whoami_interactive())
+        print(
+            json.dumps(
+                {
+                    "user_ref": result.get("user_ref"),
+                    "username": result.get("username"),
+                    "display_name": result.get("display_name"),
+                    "phone": _redact_phone(result.get("phone")),
+                }
+            )
+        )
         return
 
     if args.command == "logout":
-        removed = clear_session(master_key=args.master_key)
+        removed = clear_session(prompt_if_missing=True)
         print(json.dumps({"logged_out": removed}))
         return
 

@@ -11,7 +11,9 @@ from ..helpers import (
     parse_datetime,
     peer_ref,
     resolve_entity,
+    resolve_entity_fuzzy,
 )
+from ..safety import require_destructive
 
 
 def _within_range(message, min_date, max_date) -> bool:
@@ -39,26 +41,52 @@ def register(mcp) -> None:
     ) -> dict:
         """Fetch message history from one Telegram chat."""
         client = await get_client()
-        entity = await resolve_entity(client, chat_ref)
-        sender = await resolve_entity(client, from_user) if from_user else None
+        entity = await resolve_entity_fuzzy(client, chat_ref)
+        sender = await resolve_entity_fuzzy(client, from_user) if from_user else None
         lower = parse_datetime(min_date)
         upper = parse_datetime(max_date)
-        messages = await client.get_messages(
-            entity,
-            limit=max(limit * 3, limit),
-            from_user=sender,
-        )
-        filtered = [message for message in messages if _within_range(message, lower, upper)]
+        filtered = []
+        offset_id = 0
+        page_size = max(limit * 3, limit)
+        for _ in range(10):
+            batch = [
+                message
+                async for message in client.iter_messages(
+                    entity,
+                    limit=page_size,
+                    offset_id=offset_id,
+                    from_user=sender,
+                )
+            ]
+            if not batch:
+                break
+
+            for message in batch:
+                if _within_range(message, lower, upper):
+                    filtered.append(message)
+                    if len(filtered) >= limit:
+                        break
+
+            if len(filtered) >= limit:
+                break
+            if lower and batch[-1].date < lower:
+                break
+
+            next_offset = batch[-1].id
+            if next_offset == offset_id:
+                break
+            offset_id = next_offset
+
         return {"chat_ref": peer_ref(entity), "count": len(filtered[:limit]), "messages": iter_message_dicts(filtered[:limit])}
 
     @mcp.tool()
     @with_flood_wait
     async def get_unread(chat_ref: str | None = None, limit: int = 100) -> dict:
-        """Fetch unread messages for one chat or across all dialogs."""
+        """Fetch unread messages for one chat or across all dialogs with a flat aggregate list."""
         client = await get_client()
 
         if chat_ref:
-            entity = await resolve_entity(client, chat_ref)
+            entity = await resolve_entity_fuzzy(client, chat_ref)
             dialog = await _load_dialog(client, entity)
             if dialog is None:
                 raise RuntimeError(f"Could not find dialog metadata for {chat_ref}.")
@@ -73,6 +101,7 @@ def register(mcp) -> None:
 
         dialogs = await client.get_dialogs(limit=200)
         results = []
+        flat_messages = []
         remaining = limit
         for dialog in dialogs:
             if dialog.unread_count <= 0 or remaining <= 0:
@@ -80,6 +109,7 @@ def register(mcp) -> None:
             read_max = getattr(getattr(dialog, "dialog", None), "read_inbox_max_id", 0)
             messages = await client.get_messages(dialog.entity, limit=min(remaining, dialog.unread_count + 10), min_id=read_max)
             unread = [message_to_dict(message) for message in messages if not message.out][:remaining]
+            flat_messages.extend(unread)
             results.append(
                 {
                     "dialog": dialog_to_dict(dialog),
@@ -88,7 +118,7 @@ def register(mcp) -> None:
             )
             remaining -= len(unread)
 
-        return {"dialog_count": len(results), "results": results}
+        return {"dialog_count": len(results), "messages": flat_messages, "results": results}
 
     @mcp.tool()
     @with_flood_wait
@@ -118,8 +148,8 @@ def register(mcp) -> None:
     ) -> dict:
         """Search messages within one dialog."""
         client = await get_client()
-        entity = await resolve_entity(client, chat_ref)
-        sender = await resolve_entity(client, from_user) if from_user else None
+        entity = await resolve_entity_fuzzy(client, chat_ref)
+        sender = await resolve_entity_fuzzy(client, from_user) if from_user else None
         lower = parse_datetime(min_date)
         upper = parse_datetime(max_date)
         messages = await client.get_messages(
@@ -203,8 +233,10 @@ def register(mcp) -> None:
         chat_ref: str,
         message_ids: int | list[int],
         revoke: bool = True,
+        confirm: bool = False,
     ) -> dict:
         """Delete one or more messages."""
+        require_destructive("delete_messages", confirm)
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
         ids = coerce_message_ids(message_ids)

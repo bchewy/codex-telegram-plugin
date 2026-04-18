@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from telethon import functions, types, utils as tg_utils
+from telethon import errors, functions, types, utils as tg_utils
 
 from ..client import get_client, with_flood_wait
 from ..helpers import entity_kind, get_chat_id, peer_ref, resolve_entity, resolve_input_channel, resolve_input_user, to_iso, user_to_dict
+from ..safety import require_destructive
 
 
 def _summarize_updates(result) -> dict:
@@ -86,8 +87,14 @@ def register(mcp) -> None:
 
     @mcp.tool()
     @with_flood_wait
-    async def remove_member(chat_ref: str, user_ref: str, revoke_history: bool = False) -> dict:
+    async def remove_member(
+        chat_ref: str,
+        user_ref: str,
+        revoke_history: bool = False,
+        confirm: bool = False,
+    ) -> dict:
         """Remove a member from a chat/channel."""
+        require_destructive("remove_member", confirm)
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
         user_entity = await resolve_entity(client, user_ref)
@@ -153,8 +160,9 @@ def register(mcp) -> None:
 
     @mcp.tool()
     @with_flood_wait
-    async def demote_admin(chat_ref: str, user_ref: str) -> dict:
+    async def demote_admin(chat_ref: str, user_ref: str, confirm: bool = False) -> dict:
         """Remove admin rights from a user."""
+        require_destructive("demote_admin", confirm)
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
         user = await resolve_entity(client, user_ref)
@@ -186,8 +194,9 @@ def register(mcp) -> None:
 
     @mcp.tool()
     @with_flood_wait
-    async def leave_chat(chat_ref: str) -> dict:
+    async def leave_chat(chat_ref: str, confirm: bool = False) -> dict:
         """Leave a chat/channel."""
+        require_destructive("leave_chat", confirm)
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
         await client.delete_dialog(entity)
@@ -195,10 +204,15 @@ def register(mcp) -> None:
 
     @mcp.tool()
     @with_flood_wait
-    async def delete_chat(chat_ref: str) -> dict:
+    async def delete_chat(chat_ref: str, confirm: bool = False) -> dict:
         """Delete a chat/channel if the account has permission, otherwise leave it."""
+        require_destructive("delete_chat", confirm)
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
+        deleted = False
+        fell_back_to_leave = False
+        fallback_succeeded = False
+        error: str | None = None
 
         try:
             if isinstance(entity, types.Chat):
@@ -206,10 +220,23 @@ def register(mcp) -> None:
             else:
                 channel = await resolve_input_channel(client, chat_ref)
                 await client(functions.channels.DeleteChannelRequest(channel=channel))
-        except Exception:
-            await client.delete_dialog(entity)
+            deleted = True
+        except (errors.RPCError, ValueError) as exc:
+            fell_back_to_leave = True
+            error = f"{type(exc).__name__}: {exc}"
+            try:
+                await client.delete_dialog(entity)
+                fallback_succeeded = True
+            except Exception as inner:
+                error = f"{error}; fallback failed: {type(inner).__name__}: {inner}"
 
-        return {"chat_ref": peer_ref(entity), "deleted_or_left": True}
+        return {
+            "chat_ref": peer_ref(entity),
+            "deleted": deleted,
+            "fell_back_to_leave": fell_back_to_leave,
+            "fallback_succeeded": fallback_succeeded,
+            "error": error,
+        }
 
     @mcp.tool()
     @with_flood_wait

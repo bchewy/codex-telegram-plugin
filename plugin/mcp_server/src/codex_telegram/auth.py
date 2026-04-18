@@ -74,7 +74,11 @@ async def login_interactive(
             updated_at=now,
         )
 
-        backend = save_session(record, master_key=master_key)
+        backend = save_session(
+            record,
+            master_key=master_key,
+            prompt_if_missing=True,
+        )
         result = {
             "ok": True,
             "storage": backend,
@@ -83,7 +87,6 @@ async def login_interactive(
             "display_name": record.display_name,
             "phone": phone,
         }
-        print(result)
         return result
     except (
         errors.ApiIdInvalidError,
@@ -116,7 +119,6 @@ async def whoami_interactive() -> dict[str, Any]:
             "display_name": tg_utils.get_display_name(me) if me else None,
             "phone": getattr(me, "phone", None),
         }
-        print(result)
         return result
     finally:
         await client.disconnect()

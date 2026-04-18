@@ -230,17 +230,34 @@ The login wizard stores the Telegram session in:
 1. the OS keyring, if available
 2. otherwise an encrypted file at `~/.config/codex-telegram/session.enc`
 
-If the OS keyring is unavailable, rerun login with a master key:
+`CODEX_TELEGRAM_SESSION` also exists, but it is intended for test/CI use only. It injects a raw `StringSession` directly and bypasses the normal keyring / encrypted-file flow.
+
+If the OS keyring is unavailable:
 
 ```bash
-uv run --project ./mcp_server codex-telegram login --master-key "your-secret"
+# preferred: let the login flow prompt if keyring is unavailable
+uv run --project ./mcp_server codex-telegram login
 ```
 
 or:
 
 ```bash
 export CODEX_TELEGRAM_MASTER_KEY="your-secret"
+uv run --project ./mcp_server codex-telegram login
 ```
+
+Do not pass the master key as a CLI flag. It ends up in shell history and `ps`.
+
+## Environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `TG_API_ID` | Telegram API ID used for login/session bootstrap. |
+| `TG_API_HASH` | Telegram API hash used for login/session bootstrap. |
+| `CODEX_TELEGRAM_MASTER_KEY` | Encrypts/decrypts the fallback session file when the OS keyring is unavailable. |
+| `CODEX_TELEGRAM_SESSION` | Test/CI-only raw `StringSession` injection. Avoid using this for normal local installs. |
+| `CODEX_TELEGRAM_ALLOW_DESTRUCTIVE` | Must be set to `1` plus `confirm=True` on the tool call before destructive tools like `delete_chat`, `delete_messages`, or `logout` will run. |
+| `CODEX_TELEGRAM_UPLOAD_DIR` | Upload sandbox for `send_*` and `set_profile_photo`. Files outside this directory require `allow_arbitrary_path=True`. |
 
 ## Troubleshooting
 
@@ -274,7 +291,13 @@ Do not rely on that alone. Plugin-bundled MCP servers can be present at runtime 
 
 ### Keyring issues
 
-If the OS keyring fails, use `--master-key` or `CODEX_TELEGRAM_MASTER_KEY`.
+If the OS keyring fails, rerun login and let it prompt, or pre-set `CODEX_TELEGRAM_MASTER_KEY`.
+
+## What Codex sees
+
+When you invoke a Telegram skill or MCP tool, Codex receives raw chat content and metadata from the response payload. That can include message text, sender names, captions, usernames, reactions, and file metadata.
+
+If you would not paste the content into a Codex prompt directly, do not summarize or process it through this plugin.
 
 ## Security / Telegram caveats
 

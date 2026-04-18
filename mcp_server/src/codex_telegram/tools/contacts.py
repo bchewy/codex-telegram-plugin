@@ -4,6 +4,7 @@ from telethon import functions, types, utils as tg_utils
 
 from ..client import get_client, with_flood_wait
 from ..helpers import peer_ref, resolve_entity, resolve_input_user, user_to_dict
+from ..safety import require_destructive
 
 
 def register(mcp) -> None:
@@ -58,8 +59,9 @@ def register(mcp) -> None:
 
     @mcp.tool()
     @with_flood_wait
-    async def delete_contact(user_refs: list[str]) -> dict:
+    async def delete_contact(user_refs: list[str], confirm: bool = False) -> dict:
         """Delete one or more contacts."""
+        require_destructive("delete_contact", confirm)
         client = await get_client()
         users = [await resolve_input_user(client, user_ref) for user_ref in user_refs]
         result = await client(functions.contacts.DeleteContactsRequest(id=users))
@@ -68,12 +70,27 @@ def register(mcp) -> None:
 
     @mcp.tool()
     @with_flood_wait
-    async def block_user(user_ref: str) -> dict:
+    async def block_user(user_ref: str, confirm: bool = False) -> dict:
         """Block a Telegram user."""
+        require_destructive("block_user", confirm)
         client = await get_client()
         input_peer = await client.get_input_entity(await resolve_entity(client, user_ref))
         await client(functions.contacts.BlockRequest(id=input_peer))
         return {"user_ref": user_ref, "blocked": True}
+
+    @mcp.tool()
+    @with_flood_wait
+    async def get_user_phone(user_ref: str, confirm: bool = False) -> dict:
+        """Return the raw phone number for a Telegram user."""
+        require_destructive("get_user_phone", confirm)
+        client = await get_client()
+        entity = await resolve_entity(client, user_ref)
+        if not isinstance(entity, types.User):
+            raise RuntimeError("get_user_phone requires a user reference, not a chat/channel.")
+        return {
+            "user_ref": peer_ref(entity),
+            "phone": entity.phone,
+        }
 
     @mcp.tool()
     @with_flood_wait

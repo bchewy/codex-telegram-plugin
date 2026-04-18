@@ -6,6 +6,7 @@ from telethon import functions, types
 
 from ..client import get_client, with_flood_wait
 from ..helpers import coerce_message_ids, draft_to_dict, message_to_dict, parse_datetime, peer_ref, resolve_entity, resolve_input_peer
+from ..safety import require_destructive
 
 
 def _text_with_entities(value: str) -> types.TextWithEntities:
@@ -83,6 +84,10 @@ def register(mcp) -> None:
             raise RuntimeError("The target message is not a poll.")
 
         answers = message.media.poll.answers
+        if any(index < 0 or index >= len(answers) for index in option_indices):
+            raise ValueError(
+                f"Invalid option index for poll with {len(answers)} options: {option_indices}"
+            )
         selected = [answers[index].option for index in option_indices]
         await client(functions.messages.SendVoteRequest(peer=input_peer, msg_id=message_id, options=selected))
         return {"chat_ref": peer_ref(entity), "message_id": message_id, "voted_indices": option_indices}
@@ -217,8 +222,13 @@ def register(mcp) -> None:
 
     @mcp.tool()
     @with_flood_wait
-    async def cancel_scheduled(chat_ref: str, message_ids: list[int] | None = None) -> dict:
+    async def cancel_scheduled(
+        chat_ref: str,
+        message_ids: list[int] | None = None,
+        confirm: bool = False,
+    ) -> dict:
         """Cancel scheduled messages by id, or all scheduled messages in a dialog."""
+        require_destructive("cancel_scheduled", confirm)
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
         input_peer = await resolve_input_peer(client, chat_ref)

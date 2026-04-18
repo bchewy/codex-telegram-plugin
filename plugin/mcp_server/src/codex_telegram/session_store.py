@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import getpass
 import json
 from json import JSONDecodeError
 import os
@@ -88,6 +89,13 @@ def _write_encrypted_file(record: StoredSession, master_key: str) -> None:
     os.chmod(file_path, 0o600)
 
 
+def _prompt_master_key(prompt: str = "Telegram session master key: ") -> str:
+    value = getpass.getpass(prompt).strip()
+    if not value:
+        raise SessionStoreError("A Telegram session master key is required to continue.")
+    return value
+
+
 def _read_encrypted_file(master_key: str | None) -> StoredSession | None:
     file_path = _session_file()
     if not file_path.exists():
@@ -96,7 +104,7 @@ def _read_encrypted_file(master_key: str | None) -> StoredSession | None:
     if not master_key:
         raise MissingSessionError(
             "Encrypted Telegram session found, but no master key was provided. "
-            "Set CODEX_TELEGRAM_MASTER_KEY or re-run `codex-telegram login --master-key ...`."
+            "Set CODEX_TELEGRAM_MASTER_KEY and retry."
         )
     payload = json.loads(file_path.read_text(encoding="utf-8"))
     return StoredSession.from_json(_decrypt_payload(payload, master_key))
@@ -147,22 +155,30 @@ def load_session(master_key: str | None = None) -> StoredSession:
     )
 
 
-def save_session(record: StoredSession, master_key: str | None = None) -> str:
+def save_session(
+    record: StoredSession,
+    master_key: str | None = None,
+    *,
+    prompt_if_missing: bool = False,
+) -> str:
     if _write_keyring(record):
         return "keyring"
 
     master_key = master_key or os.getenv(MASTER_KEY_ENV_VAR)
     if not master_key:
-        raise SessionStoreError(
-            "The OS keyring is unavailable. Re-run login with `--master-key` or "
-            "set CODEX_TELEGRAM_MASTER_KEY so the plugin can use the encrypted file fallback."
-        )
+        if prompt_if_missing:
+            master_key = _prompt_master_key()
+        else:
+            raise SessionStoreError(
+                "The OS keyring is unavailable. Set CODEX_TELEGRAM_MASTER_KEY "
+                "so the plugin can use the encrypted file fallback."
+            )
 
     _write_encrypted_file(record, master_key)
     return "encrypted-file"
 
 
-def clear_session(master_key: str | None = None) -> bool:
+def clear_session(master_key: str | None = None, *, prompt_if_missing: bool = False) -> bool:
     removed = False
 
     try:
@@ -173,11 +189,15 @@ def clear_session(master_key: str | None = None) -> bool:
 
     file_path = _session_file()
     if file_path.exists():
-        if not (master_key or os.getenv(MASTER_KEY_ENV_VAR)):
-            raise MissingSessionError(
-                "Encrypted Telegram session exists. Provide CODEX_TELEGRAM_MASTER_KEY "
-                "or pass `--master-key` to clear it."
-            )
+        master_key = master_key or os.getenv(MASTER_KEY_ENV_VAR)
+        if not master_key:
+            if prompt_if_missing:
+                master_key = _prompt_master_key()
+            else:
+                raise MissingSessionError(
+                    "Encrypted Telegram session exists. Provide CODEX_TELEGRAM_MASTER_KEY "
+                    "to clear it."
+                )
         file_path.unlink()
         removed = True
 

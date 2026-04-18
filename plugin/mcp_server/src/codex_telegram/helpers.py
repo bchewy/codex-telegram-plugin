@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import os
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from telethon import TelegramClient, types, utils as tg_utils
+from telethon import TelegramClient, errors, types, utils as tg_utils
 from telethon.tl.custom.dialog import Dialog
 from telethon.tl.custom.draft import Draft
 from telethon.tl.custom.message import Message
@@ -84,6 +85,43 @@ def ensure_download_dir(path: str | None = None) -> Path:
     return target
 
 
+UPLOAD_DIR_ENV = "CODEX_TELEGRAM_UPLOAD_DIR"
+DEFAULT_UPLOAD_DIR = Path.home() / "Downloads" / "codex-telegram-uploads"
+HARD_DENY_PREFIXES = (".ssh", ".aws", ".gnupg", ".config/codex-telegram")
+
+
+def resolve_upload_path(file_path: str, *, allow_arbitrary_path: bool) -> tuple[Path, str | None]:
+    target = Path(file_path).expanduser().resolve()
+    if not target.exists():
+        raise FileNotFoundError(f"Upload path does not exist: {target}")
+    if not target.is_file():
+        raise IsADirectoryError(f"Upload path is not a file: {target}")
+
+    home = Path.home().resolve()
+    try:
+        rel = target.relative_to(home)
+    except ValueError:
+        rel = None
+
+    if rel and any(str(rel).startswith(prefix) for prefix in HARD_DENY_PREFIXES):
+        raise PermissionError(f"refusing to read sensitive path: {target}")
+
+    sandbox_raw = os.getenv(UPLOAD_DIR_ENV)
+    sandbox = Path(sandbox_raw).expanduser().resolve() if sandbox_raw else DEFAULT_UPLOAD_DIR.resolve()
+    sandbox.mkdir(parents=True, exist_ok=True)
+
+    try:
+        target.relative_to(sandbox)
+        return target, None
+    except ValueError:
+        if not allow_arbitrary_path:
+            raise PermissionError(
+                f"refusing to upload {target}; outside {sandbox}. "
+                "Move the file into the sandbox or pass allow_arbitrary_path=True."
+            ) from None
+        return target, f"uploaded outside sandbox: {target}"
+
+
 def _message_file_info(message: Message) -> dict[str, Any] | None:
     if not message.file:
         return None
@@ -148,7 +186,7 @@ def user_to_dict(entity: types.User) -> dict[str, Any]:
         "user_ref": peer_ref(entity),
         "id": entity.id,
         "username": entity.username,
-        "phone": entity.phone,
+        "has_phone": bool(entity.phone),
         "display_name": tg_utils.get_display_name(entity),
         "bot": entity.bot,
         "verified": entity.verified,
@@ -165,7 +203,7 @@ def dialog_to_dict(dialog: Dialog) -> dict[str, Any]:
         "title": dialog.title,
         "display_name": tg_utils.get_display_name(entity),
         "username": getattr(entity, "username", None),
-        "phone": getattr(entity, "phone", None),
+        "has_phone": bool(getattr(entity, "phone", None)),
         "unread_count": dialog.unread_count,
         "unread_mentions_count": dialog.unread_mentions_count,
         "pinned": dialog.pinned,
@@ -188,7 +226,7 @@ def draft_to_dict(draft: Draft) -> dict[str, Any]:
     }
 
 
-async def resolve_entity(client: TelegramClient, ref: str | int | Any) -> Any:
+async def _resolve_entity_direct(client: TelegramClient, ref: str | int | Any) -> Any:
     if hasattr(ref, "SUBCLASS_OF_ID"):
         return ref
 
@@ -215,9 +253,25 @@ async def resolve_entity(client: TelegramClient, ref: str | int | Any) -> Any:
         if peer is not None:
             return await client.get_entity(peer)
 
+    return await client.get_entity(candidate)
+
+
+async def resolve_entity(client: TelegramClient, ref: str | int | Any) -> Any:
     try:
-        return await client.get_entity(candidate)
-    except Exception:
+        return await _resolve_entity_direct(client, ref)
+    except (errors.UsernameInvalidError, errors.UsernameNotOccupiedError, ValueError) as exc:
+        candidate = ref.strip() if isinstance(ref, str) else str(ref)
+        raise ValueError(f"Could not resolve chat/user reference: {candidate}") from exc
+
+
+async def resolve_entity_fuzzy(client: TelegramClient, ref: str | int | Any) -> Any:
+    try:
+        return await _resolve_entity_direct(client, ref)
+    except (errors.UsernameInvalidError, errors.UsernameNotOccupiedError, ValueError):
+        if not isinstance(ref, str):
+            raise
+
+        candidate = ref.strip()
         dialogs = await client.get_dialogs(limit=200)
         lowered = candidate.casefold()
         exact = next(
