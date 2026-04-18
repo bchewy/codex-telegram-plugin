@@ -65,7 +65,7 @@ codex mcp list
 Once this repo is pushed:
 
 ```bash
-codex marketplace add brianchew/codex-telegram-plugin
+codex marketplace add bchewy/codex-telegram-plugin
 ```
 
 Then open `/plugins` and install/enable `Telegram`.

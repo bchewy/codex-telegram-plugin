@@ -11,7 +11,7 @@
     "developerName": "Brian Chew",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],
-    "websiteURL": "https://github.com/brianchew/codex-telegram-plugin",
+    "websiteURL": "https://github.com/bchewy/codex-telegram-plugin",
     "defaultPrompt": [
       "Summarize my unread Telegram messages from today",
       "Find Telegram messages from Alice about the launch",
