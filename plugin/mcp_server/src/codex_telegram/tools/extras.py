@@ -12,6 +12,14 @@ def _text_with_entities(value: str) -> types.TextWithEntities:
     return types.TextWithEntities(text=value, entities=[])
 
 
+def _draft_items(drafts) -> list:
+    if isinstance(drafts, list):
+        return drafts
+    if drafts is None:
+        return []
+    return [drafts]
+
+
 def register(mcp) -> None:
     @mcp.tool()
     @with_flood_wait
@@ -183,7 +191,8 @@ def register(mcp) -> None:
         """List drafts for one chat or across all chats."""
         client = await get_client()
         drafts = await client.get_drafts(await resolve_entity(client, chat_ref) if chat_ref else None)
-        return {"count": len(drafts), "drafts": [draft_to_dict(draft) for draft in drafts]}
+        items = _draft_items(drafts)
+        return {"count": len(items), "drafts": [draft_to_dict(draft) for draft in items]}
 
     @mcp.tool()
     @with_flood_wait
