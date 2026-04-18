@@ -20,3 +20,5 @@ uv.lock
 local/
 *.session
 *.session-journal
+.omx/
+.claude/

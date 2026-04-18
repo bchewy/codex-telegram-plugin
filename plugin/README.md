@@ -11,10 +11,6 @@ This plugin lets Codex:
 - manage groups/channels
 - work with media, drafts, reactions, polls, and scheduled messages
 
-<p align="center">
-  <img src="./assets/telegram-plugin-page.png" alt="Telegram plugin page in Codex" width="720" />
-</p>
-
 ## Fast setup
 
 If you just want the shortest path, do this:
@@ -242,22 +238,26 @@ uv run --project ./mcp_server codex-telegram login
 or:
 
 ```bash
-export CODEX_TELEGRAM_MASTER_KEY="your-secret"
+read -rsp "Telegram session master key: " CODEX_TELEGRAM_MASTER_KEY; echo
+export CODEX_TELEGRAM_MASTER_KEY
 uv run --project ./mcp_server codex-telegram login
+unset CODEX_TELEGRAM_MASTER_KEY
 ```
 
 Do not pass the master key as a CLI flag. It ends up in shell history and `ps`.
 
 ## Environment variables
 
-| Variable | Purpose |
-| --- | --- |
-| `TG_API_ID` | Telegram API ID used for login/session bootstrap. |
-| `TG_API_HASH` | Telegram API hash used for login/session bootstrap. |
-| `CODEX_TELEGRAM_MASTER_KEY` | Encrypts/decrypts the fallback session file when the OS keyring is unavailable. |
-| `CODEX_TELEGRAM_SESSION` | Test/CI-only raw `StringSession` injection. Avoid using this for normal local installs. |
+
+| Variable                           | Purpose                                                                                                                                       |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TG_API_ID`                        | Telegram API ID used for login/session bootstrap.                                                                                             |
+| `TG_API_HASH`                      | Telegram API hash used for login/session bootstrap.                                                                                           |
+| `CODEX_TELEGRAM_MASTER_KEY`        | Encrypts/decrypts the fallback session file when the OS keyring is unavailable.                                                               |
+| `CODEX_TELEGRAM_SESSION`           | Test/CI-only raw `StringSession` injection. Avoid using this for normal local installs.                                                       |
 | `CODEX_TELEGRAM_ALLOW_DESTRUCTIVE` | Must be set to `1` plus `confirm=True` on the tool call before destructive tools like `delete_chat`, `delete_messages`, or `logout` will run. |
-| `CODEX_TELEGRAM_UPLOAD_DIR` | Upload sandbox for `send_*` and `set_profile_photo`. Files outside this directory require `allow_arbitrary_path=True`. |
+| `CODEX_TELEGRAM_UPLOAD_DIR`        | Upload sandbox for `send_*` and `set_profile_photo`. Files outside this directory require `allow_arbitrary_path=True`.                        |
+
 
 ## Troubleshooting
 
