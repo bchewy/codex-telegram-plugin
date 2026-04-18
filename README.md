@@ -10,7 +10,8 @@ This plugin lets Codex:
 - triage unread threads
 - manage groups/channels
 - work with media, drafts, reactions, polls, and scheduled messages
-- <img width="879" height="1066" alt="image" src="https://github.com/user-attachments/assets/638ef68f-2854-42d0-a0d1-cc33429b91c6" />
+<img width="878" height="1071" alt="image" src="https://github.com/user-attachments/assets/6f6322b8-253b-458a-8bc2-cf7e5ed62932" />
+
 
 
 ## Fast setup
