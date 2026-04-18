@@ -8,7 +8,7 @@
       "name": "telegram",
       "source": {
         "source": "local",
-        "path": "./plugin"
+        "path": "./telegram"
       },
       "policy": {
         "installation": "AVAILABLE",

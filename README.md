@@ -111,7 +111,7 @@ This plugin uses Telegram user-account MTProto auth, not the Bot API.
 Run:
 
 ```bash
-uv run --project ./mcp_server codex-telegram login
+uv run --project ./telegram/mcp_server codex-telegram login
 ```
 
 ### If you already installed the plugin into Codex and just want to authenticate the installed bundle
@@ -184,16 +184,16 @@ $telegram:telegram-send draft a reply to the latest message in Saved Messages
 
 ```bash
 # show storage status
-uv run --project ./mcp_server codex-telegram storage
+uv run --project ./telegram/mcp_server codex-telegram storage
 
 # inspect the authenticated account
-uv run --project ./mcp_server codex-telegram whoami
+uv run --project ./telegram/mcp_server codex-telegram whoami
 
 # log out / clear the stored session
-uv run --project ./mcp_server codex-telegram logout
+uv run --project ./telegram/mcp_server codex-telegram logout
 
 # run tests
-uv run --project ./mcp_server pytest
+uv run --project ./telegram/mcp_server pytest
 ```
 
 ### Installed-bundle flow
@@ -234,7 +234,7 @@ If the OS keyring is unavailable:
 
 ```bash
 # preferred: let the login flow prompt if keyring is unavailable
-uv run --project ./mcp_server codex-telegram login
+uv run --project ./telegram/mcp_server codex-telegram login
 ```
 
 or:
@@ -242,7 +242,7 @@ or:
 ```bash
 read -rsp "Telegram session master key: " CODEX_TELEGRAM_MASTER_KEY; echo
 export CODEX_TELEGRAM_MASTER_KEY
-uv run --project ./mcp_server codex-telegram login
+uv run --project ./telegram/mcp_server codex-telegram login
 unset CODEX_TELEGRAM_MASTER_KEY
 ```
 
@@ -311,11 +311,10 @@ If you would not paste the content into a Codex prompt directly, do not summariz
 
 ## Repo layout
 
-- `mcp_server/`: source-of-truth Python package and MCP server
-- `skills/`: source-of-truth skill files
-- `.codex-plugin/plugin.json`: plugin manifest
-- `.mcp.json`: bundled MCP server declaration
-- `.agents/plugins/marketplace.json`: marketplace definition
-- `plugin/`: self-contained installable bundle used by Codex
-
-After changing manifests, skills, assets, or `mcp_server/`, sync `plugin/` before shipping.
+- `telegram/`: the plugin bundle (single source of truth)
+  - `mcp_server/`: Python package and MCP server
+  - `skills/`: skill files loaded by the plugin
+  - `assets/`: icon, logo, screenshots referenced by the manifest
+  - `.codex-plugin/plugin.json`: plugin manifest
+  - `.mcp.json`: bundled MCP server declaration
+- `.agents/plugins/marketplace.json`: local marketplace definition (points at `./telegram`)
