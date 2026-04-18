@@ -1,0 +1,22 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+*.pyc
+*.pyo
+*.pyd
+dist/
+build/
+*.egg-info/
+.DS_Store
+.idea/
+.cursor/
+uv.lock
+
+# Local Telegram secrets and encrypted fallback state
+.env
+.env.*
+!.env.example
+local/
+*.session
+*.session-journal

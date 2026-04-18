@@ -1,0 +1,24 @@
+{
+  "name": "telegram",
+  "version": "0.1.0",
+  "description": "Read, summarize, send, and manage Telegram chats from Codex.",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Telegram",
+    "shortDescription": "Personal Telegram account in Codex",
+    "longDescription": "Connect your personal Telegram account and let Codex summarize, search, send, and manage chats.",
+    "developerName": "Brian Chew",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/brianchew/codex-telegram-plugin",
+    "defaultPrompt": [
+      "Summarize my unread Telegram messages from today",
+      "Find Telegram messages from Alice about the launch",
+      "Draft a Telegram reply to the design thread"
+    ],
+    "brandColor": "#229ED9",
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/logo.svg"
+  }
+}
