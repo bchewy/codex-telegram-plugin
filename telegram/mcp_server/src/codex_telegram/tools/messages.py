@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from telethon import types
+import asyncio
+from datetime import timedelta
+from itertools import islice
 
-from ..client import get_client, with_flood_wait
+from telethon import errors, types
+
+from ..client import get_client, get_history_client, with_flood_wait
 from ..helpers import (
     coerce_message_ids,
     dialog_to_dict,
@@ -14,6 +18,8 @@ from ..helpers import (
     resolve_entity_fuzzy,
 )
 from ..safety import require_destructive
+
+_ONE_MICROSECOND = timedelta(microseconds=1)
 
 
 def _within_range(message, min_date, max_date) -> bool:
@@ -27,6 +33,169 @@ def _within_range(message, min_date, max_date) -> bool:
 async def _load_dialog(client, entity):
     dialogs = await client.get_dialogs(limit=200)
     return next((item for item in dialogs if peer_ref(item.entity) == peer_ref(entity)), None)
+
+
+def _as_message_list(value):
+    if value is None:
+        return []
+    if isinstance(value, types.MessageEmpty):
+        return [value]
+    if hasattr(value, "id"):
+        return [value]
+    return list(value)
+
+
+def _is_empty_message(message) -> bool:
+    return message is None or isinstance(message, types.MessageEmpty)
+
+
+def _message_payload(message, *, chat_ref_value: str, include_empty: bool) -> dict | None:
+    if _is_empty_message(message):
+        if not include_empty:
+            return None
+        return {
+            "id": getattr(message, "id", None),
+            "chat_ref": chat_ref_value,
+            "deleted": True,
+        }
+    return message_to_dict(message)
+
+
+def _iter_message_id_chunks(start_id: int, end_id: int, *, chunk_size: int = 100):
+    current = start_id
+    while current <= end_id:
+        stop = min(current + chunk_size - 1, end_id)
+        yield list(range(current, stop + 1))
+        current = stop + 1
+
+
+async def _fetch_message_chunk(client, entity, ids: list[int], semaphore: asyncio.Semaphore):
+    async with semaphore:
+        attempts = 0
+        while True:
+            try:
+                return _as_message_list(await client.get_messages(entity, ids=ids))
+            except errors.FloodWaitError as exc:
+                attempts += 1
+                if attempts > 1:
+                    raise RuntimeError(
+                        f"Telegram rate limited this request for {exc.seconds} seconds. "
+                        "Wait for the flood window to expire and retry."
+                    ) from exc
+                await asyncio.sleep(exc.seconds)
+
+
+async def fetch_bulk_history_payload(
+    *,
+    chat_ref: str,
+    since_message_id: int = 0,
+    until_message_id: int | None = None,
+    max_messages: int = 50_000,
+    concurrency: int = 8,
+    include_empty: bool = False,
+    takeout: bool = False,
+    takeout_kwargs: dict | None = None,
+) -> dict:
+    if since_message_id < 0:
+        raise ValueError("since_message_id must be >= 0")
+    if until_message_id is not None and until_message_id < 0:
+        raise ValueError("until_message_id must be >= 0")
+    if max_messages <= 0:
+        raise ValueError("max_messages must be > 0")
+    if concurrency <= 0:
+        raise ValueError("concurrency must be > 0")
+
+    client = await get_client()
+    entity = await resolve_entity_fuzzy(client, chat_ref)
+    chat_ref_value = peer_ref(entity)
+
+    async with get_history_client(use_takeout=takeout, takeout_kwargs=takeout_kwargs) as history_client:
+        latest_messages = _as_message_list(await history_client.get_messages(entity, limit=1))
+        if not latest_messages:
+            return {
+                "chat_ref": chat_ref_value,
+                "count": 0,
+                "deleted_count": 0,
+                "from_id": None,
+                "to_id": None,
+                "messages": [],
+                "truncated": False,
+                "next_since_message_id": None,
+                "used_takeout": takeout,
+            }
+
+        highest_id = latest_messages[0].id
+        if until_message_id is not None:
+            highest_id = min(highest_id, until_message_id)
+
+        start_id = since_message_id + 1
+        if highest_id < start_id:
+            return {
+                "chat_ref": chat_ref_value,
+                "count": 0,
+                "deleted_count": 0,
+                "from_id": None,
+                "to_id": None,
+                "messages": [],
+                "truncated": False,
+                "next_since_message_id": None,
+                "used_takeout": takeout,
+            }
+
+        semaphore = asyncio.Semaphore(concurrency)
+        payloads: list[dict] = []
+        deleted_count = 0
+        chunk_iter = _iter_message_id_chunks(start_id, highest_id)
+        scan_complete = True
+
+        while True:
+            batch_chunks = list(islice(chunk_iter, concurrency))
+            if not batch_chunks:
+                break
+
+            batch_results = await asyncio.gather(
+                *[
+                    _fetch_message_chunk(history_client, entity, ids, semaphore)
+                    for ids in batch_chunks
+                ]
+            )
+
+            for chunk_messages in batch_results:
+                for message in chunk_messages:
+                    if _is_empty_message(message):
+                        deleted_count += 1
+                    payload = _message_payload(
+                        message,
+                        chat_ref_value=chat_ref_value,
+                        include_empty=include_empty,
+                    )
+                    if payload is None:
+                        continue
+                    payloads.append(payload)
+                    if len(payloads) >= max_messages:
+                        scan_complete = False
+                        break
+                if not scan_complete:
+                    break
+
+            if not scan_complete:
+                break
+
+        payloads.sort(key=lambda item: item["id"] or 0)
+        payloads = payloads[:max_messages]
+        next_since_message_id = payloads[-1]["id"] if not scan_complete and payloads else None
+
+        return {
+            "chat_ref": chat_ref_value,
+            "count": len(payloads),
+            "deleted_count": deleted_count,
+            "from_id": payloads[0]["id"] if payloads else None,
+            "to_id": payloads[-1]["id"] if payloads else None,
+            "messages": payloads,
+            "truncated": not scan_complete,
+            "next_since_message_id": next_since_message_id,
+            "used_takeout": takeout,
+        }
 
 
 def register(mcp) -> None:
@@ -46,38 +215,82 @@ def register(mcp) -> None:
         lower = parse_datetime(min_date)
         upper = parse_datetime(max_date)
         filtered = []
-        offset_id = 0
-        page_size = max(limit * 3, limit)
-        for _ in range(10):
-            batch = [
-                message
-                async for message in client.iter_messages(
-                    entity,
-                    limit=page_size,
-                    offset_id=offset_id,
-                    from_user=sender,
-                )
-            ]
-            if not batch:
-                break
+        if lower:
+            async for message in client.iter_messages(
+                entity,
+                offset_date=lower - _ONE_MICROSECOND,
+                reverse=True,
+                from_user=sender,
+            ):
+                if upper and message.date > upper:
+                    break
+                if not _within_range(message, lower, upper):
+                    continue
+                filtered.append(message)
+                if len(filtered) >= limit:
+                    break
+        else:
+            offset_id = 0
+            offset_date = upper + _ONE_MICROSECOND if upper else None
+            page_size = max(limit * 3, limit)
+            for _ in range(10):
+                batch = [
+                    message
+                    async for message in client.iter_messages(
+                        entity,
+                        limit=page_size,
+                        offset_id=offset_id,
+                        offset_date=offset_date,
+                        from_user=sender,
+                    )
+                ]
+                if not batch:
+                    break
 
-            for message in batch:
-                if _within_range(message, lower, upper):
-                    filtered.append(message)
-                    if len(filtered) >= limit:
-                        break
+                for message in batch:
+                    if _within_range(message, lower, upper):
+                        filtered.append(message)
+                        if len(filtered) >= limit:
+                            break
 
-            if len(filtered) >= limit:
-                break
-            if lower and batch[-1].date < lower:
-                break
+                if len(filtered) >= limit:
+                    break
 
-            next_offset = batch[-1].id
-            if next_offset == offset_id:
-                break
-            offset_id = next_offset
+                next_offset = batch[-1].id
+                if next_offset == offset_id:
+                    break
+                offset_id = next_offset
+                offset_date = None
 
         return {"chat_ref": peer_ref(entity), "count": len(filtered[:limit]), "messages": iter_message_dicts(filtered[:limit])}
+
+    @mcp.tool()
+    @with_flood_wait
+    async def get_message_context(chat_ref: str, message_id: int, context_size: int = 3) -> dict:
+        """Fetch messages around a specific Telegram message."""
+        client = await get_client()
+        entity = await resolve_entity(client, chat_ref)
+        before, center, after = await asyncio.gather(
+            client.get_messages(entity, limit=context_size, max_id=message_id),
+            client.get_messages(entity, ids=message_id),
+            client.get_messages(entity, limit=context_size, min_id=message_id, reverse=True),
+        )
+        center_messages = _as_message_list(center)
+        if not center_messages:
+            raise RuntimeError(f"Message {message_id} was not found in {chat_ref}.")
+
+        combined = [
+            *[message for message in _as_message_list(before) if not _is_empty_message(message)],
+            *[message for message in center_messages if not _is_empty_message(message)],
+            *[message for message in _as_message_list(after) if not _is_empty_message(message)],
+        ]
+        combined.sort(key=lambda message: message.id)
+        return {
+            "chat_ref": peer_ref(entity),
+            "message_id": message_id,
+            "count": len(combined),
+            "messages": iter_message_dicts(combined),
+        }
 
     @mcp.tool()
     @with_flood_wait
@@ -160,6 +373,51 @@ def register(mcp) -> None:
         )
         filtered = [message for message in messages if _within_range(message, lower, upper)]
         return {"chat_ref": peer_ref(entity), "query": query, "count": len(filtered[:limit]), "messages": iter_message_dicts(filtered[:limit])}
+
+    @mcp.tool()
+    @with_flood_wait
+    async def init_takeout_session(
+        contacts: bool = False,
+        users: bool = True,
+        chats: bool = True,
+        megagroups: bool = True,
+        channels: bool = True,
+        files: bool = False,
+    ) -> dict:
+        """Start a Telegram takeout session for bulk export workflows."""
+        takeout_kwargs = {
+            "contacts": contacts,
+            "users": users,
+            "chats": chats,
+            "megagroups": megagroups,
+            "channels": channels,
+            "files": files,
+        }
+        async with get_history_client(use_takeout=True, takeout_kwargs=takeout_kwargs) as takeout:
+            await takeout.get_messages("me", limit=1)
+        return {"ok": True, "takeout": takeout_kwargs}
+
+    @mcp.tool()
+    @with_flood_wait
+    async def bulk_fetch_history(
+        chat_ref: str,
+        since_message_id: int = 0,
+        until_message_id: int | None = None,
+        max_messages: int = 50_000,
+        concurrency: int = 8,
+        include_empty: bool = False,
+        takeout: bool = False,
+    ) -> dict:
+        """Bulk-fetch a Telegram chat by message-id range."""
+        return await fetch_bulk_history_payload(
+            chat_ref=chat_ref,
+            since_message_id=since_message_id,
+            until_message_id=until_message_id,
+            max_messages=max_messages,
+            concurrency=concurrency,
+            include_empty=include_empty,
+            takeout=takeout,
+        )
 
     @mcp.tool()
     @with_flood_wait

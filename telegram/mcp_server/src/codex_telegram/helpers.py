@@ -69,6 +69,22 @@ def peer_ref(peer: Any) -> str:
     raise TypeError(f"unsupported peer type: {type(peer)!r}")
 
 
+def _looks_like_numeric_ref(ref: str | int | Any) -> bool:
+    if isinstance(ref, int):
+        return True
+    if not isinstance(ref, str):
+        return False
+
+    candidate = ref.strip()
+    if not candidate:
+        return False
+    if candidate.lstrip("-").isdigit():
+        return True
+
+    kind, sep, raw_id = candidate.partition(":")
+    return sep != "" and kind in {"user", "chat", "channel"} and raw_id.lstrip("-").isdigit()
+
+
 def entity_kind(entity: Any) -> str:
     if isinstance(entity, (types.User, types.PeerUser, types.InputPeerUser)):
         return "user"
@@ -259,7 +275,16 @@ async def _resolve_entity_direct(client: TelegramClient, ref: str | int | Any) -
 async def resolve_entity(client: TelegramClient, ref: str | int | Any) -> Any:
     try:
         return await _resolve_entity_direct(client, ref)
-    except (errors.UsernameInvalidError, errors.UsernameNotOccupiedError, ValueError) as exc:
+    except (errors.UsernameInvalidError, errors.UsernameNotOccupiedError) as exc:
+        candidate = ref.strip() if isinstance(ref, str) else str(ref)
+        raise ValueError(f"Could not resolve chat/user reference: {candidate}") from exc
+    except ValueError as exc:
+        if _looks_like_numeric_ref(ref):
+            try:
+                await client.get_dialogs(limit=200)
+                return await _resolve_entity_direct(client, ref)
+            except (errors.UsernameInvalidError, errors.UsernameNotOccupiedError, ValueError):
+                pass
         candidate = ref.strip() if isinstance(ref, str) else str(ref)
         raise ValueError(f"Could not resolve chat/user reference: {candidate}") from exc
 

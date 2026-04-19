@@ -6,6 +6,7 @@ This plugin lets Codex:
 
 - summarize chats
 - search message history
+- cache large chat histories locally for fast repeat search and aggregation
 - draft and send replies
 - triage unread threads
 - manage groups/channels
@@ -73,6 +74,7 @@ You should see:
 - `Telegram Search`
 - `Telegram Send`
 - `Telegram Manage Groups`
+- `Telegram Media Inspect`
 - bundled MCP server: `telegram_personal`
 
 Important: start a **fresh thread** after installing. Old threads can miss newly installed plugin/skill context.
@@ -165,6 +167,10 @@ Start a fresh Codex thread and try one of these:
 @Telegram draft a Telegram reply to the design thread
 ```
 
+```text
+@Telegram watch this Telegram bubble and transcribe what it says
+```
+
 Or call the bundled skills directly:
 
 ```text
@@ -219,6 +225,8 @@ Codex registers the skills under the plugin namespace:
 - `telegram:telegram-summarize`
 - `telegram:telegram-triage-unread`
 - `telegram:telegram-search`
+- `telegram:telegram-aggregate`
+- `telegram:telegram-media-inspect`
 - `telegram:telegram-send`
 - `telegram:telegram-manage-groups`
 
@@ -258,9 +266,21 @@ Do not pass the master key as a CLI flag. It ends up in shell history and `ps`.
 | `TG_API_HASH`                      | Telegram API hash used for login/session bootstrap.                                                                                           |
 | `CODEX_TELEGRAM_MASTER_KEY`        | Encrypts/decrypts the fallback session file when the OS keyring is unavailable.                                                               |
 | `CODEX_TELEGRAM_SESSION`           | Test/CI-only raw `StringSession` injection. Avoid using this for normal local installs.                                                       |
+| `CODEX_TELEGRAM_CACHE_ENCRYPT`     | Optional: set to `1` to encrypt the local SQLite message cache. Requires `pysqlcipher3` plus `CODEX_TELEGRAM_MASTER_KEY`.                    |
 | `CODEX_TELEGRAM_ALLOW_DESTRUCTIVE` | Must be set to `1` plus `confirm=True` on the tool call before destructive tools like `delete_chat`, `delete_messages`, or `logout` will run. |
 | `CODEX_TELEGRAM_UPLOAD_DIR`        | Upload sandbox for `send_*` and `set_profile_photo`. Files outside this directory require `allow_arbitrary_path=True`.                        |
 
+
+## Local cache
+
+Large-history workflows can now use a local SQLite cache at `~/.cache/codex-telegram/cache.db`.
+
+- `sync_chat_cache` mirrors one chat into the cache
+- `search_cache` runs FTS5 keyword search against cached messages
+- `aggregate_cache` returns counts by day, week, or sender
+- `summarize_chat_history` returns chunked cache-backed batches for map-reduce summaries
+
+If you want the cache encrypted at rest, install `pysqlcipher3`, set `CODEX_TELEGRAM_CACHE_ENCRYPT=1`, and provide `CODEX_TELEGRAM_MASTER_KEY`.
 
 ## Troubleshooting
 

@@ -5,7 +5,7 @@ description: Summarize one or more Telegram chats over a time window. Use when t
 
 1. If the chat is unspecified, call `list_dialogs` and have the user pick the relevant dialog(s).
 2. Resolve the time window before fetching history. Prefer explicit windows like `today`, `last 24h`, or ISO timestamps.
-3. Call `get_history` for each target dialog. If the history is large, pull chunks and summarize chunk-by-chunk before merging.
+3. For small windows, `get_history` is fine. For large windows or exhaustive summaries, call `sync_chat_cache` first and then iterate `summarize_chat_history` chunk-by-chunk (`chunk_index` 0..N-1), summarizing each chunk before merging.
 4. Group messages by speaker and sequence so the summary follows the conversation, not isolated quotes.
 5. Attribute important decisions or claims to the sender when possible.
 6. Produce this output shape unless the user asks otherwise:

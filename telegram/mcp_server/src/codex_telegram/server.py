@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
-from .tools import account, contacts, dialogs, extras, groups, media, messages
+from .tools import account, cache, contacts, dialogs, extras, groups, media, messages
 
 mcp = FastMCP(
     name="telegram",
@@ -15,6 +15,7 @@ mcp = FastMCP(
 
 dialogs.register(mcp)
 messages.register(mcp)
+cache.register(mcp)
 media.register(mcp)
 groups.register(mcp)
 contacts.register(mcp)
