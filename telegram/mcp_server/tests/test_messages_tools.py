@@ -310,8 +310,25 @@ def test_search_global_reports_more_results_without_overfetching_payload(monkeyp
     assert result["count"] == 2
     assert result["messages"] == [{"id": 5}, {"id": 4}]
     assert result["has_more"] is True
-    assert result["scanned_count"] == 2
+    assert result["scanned_count"] == 3
     assert client.calls[0]["request_type"] == "SearchGlobalRequest"
+
+
+def test_search_global_does_not_report_more_when_page_exactly_exhausts(monkeypatch):
+    search_messages = [
+        SimpleNamespace(id=5, date=datetime(2026, 4, 5, tzinfo=UTC)),
+        SimpleNamespace(id=4, date=datetime(2026, 4, 4, tzinfo=UTC)),
+    ]
+    client = _SearchClient(search_messages)
+    monkeypatch.setattr(messages, "get_client", _async_value(client))
+    monkeypatch.setattr(messages, "iter_message_dicts", lambda items: [{"id": item.id} for item in items])
+
+    result = asyncio.run(_tool_from("search_messages_global")(query="launch", limit=2))
+
+    assert result["count"] == 2
+    assert result["has_more"] is False
+    assert result["next_offset"] is None
+    assert result["messages"] == [{"id": 5}, {"id": 4}]
 
 
 def test_get_unread_returns_flat_messages_list_for_global_mode(monkeypatch):
@@ -421,6 +438,35 @@ def test_bulk_fetch_history_forward_walk_returns_truncation_cursor(monkeypatch):
     assert result["next_since_message_id"] == 121
 
 
+def test_bulk_fetch_history_forward_walk_advances_raw_ids_when_all_messages_empty(monkeypatch):
+    client = _BulkClient(5, empty_ids={2, 3, 4, 5})
+
+    @asynccontextmanager
+    async def fake_history_client(**_kwargs):
+        yield client
+
+    monkeypatch.setattr(messages, "get_client", _async_value(SimpleNamespace()))
+    monkeypatch.setattr(messages, "get_history_client", fake_history_client)
+    monkeypatch.setattr(messages, "resolve_entity_fuzzy", _async_value(SimpleNamespace()))
+    monkeypatch.setattr(messages, "peer_ref", lambda entity: "chat:1")
+    monkeypatch.setattr(messages, "message_to_dict", lambda message: {"id": message.id})
+    monkeypatch.setattr(messages.types, "MessageEmpty", _EmptyMessage)
+
+    result = asyncio.run(
+        messages.fetch_bulk_history_payload(
+            chat_ref="chat:1",
+            since_message_id=1,
+            max_messages=10,
+        )
+    )
+
+    assert result["count"] == 0
+    assert result["deleted_count"] == 4
+    assert result["from_id"] == 2
+    assert result["to_id"] == 5
+    assert result["oldest_fetched_id"] == 2
+
+
 def test_bulk_fetch_history_forward_walk_retries_one_chunk_after_flood_wait(monkeypatch):
     # Forward walk from since=1 to highest=100 produces a single chunk [2..100].
     client = _BulkClient(100, flood_chunk=tuple(range(2, 101)))
@@ -508,6 +554,35 @@ def test_bulk_fetch_history_bootstrap_reports_complete_when_chat_smaller_than_li
     assert result["count"] == 8
     assert result["older_history_uncached"] is False
     assert result["oldest_fetched_id"] == 1
+
+
+def test_bulk_fetch_history_bootstrap_advances_raw_ids_when_all_messages_empty(monkeypatch):
+    client = _BulkClient(5, empty_ids={1, 2, 3, 4, 5})
+
+    @asynccontextmanager
+    async def fake_history_client(**_kwargs):
+        yield client
+
+    monkeypatch.setattr(messages, "get_client", _async_value(SimpleNamespace()))
+    monkeypatch.setattr(messages, "get_history_client", fake_history_client)
+    monkeypatch.setattr(messages, "resolve_entity_fuzzy", _async_value(SimpleNamespace()))
+    monkeypatch.setattr(messages, "peer_ref", lambda entity: "chat:1")
+    monkeypatch.setattr(messages, "message_to_dict", lambda message: {"id": message.id})
+    monkeypatch.setattr(messages.types, "MessageEmpty", _EmptyMessage)
+
+    result = asyncio.run(
+        messages.fetch_bulk_history_payload(
+            chat_ref="chat:1",
+            max_messages=5,
+        )
+    )
+
+    assert result["count"] == 0
+    assert result["deleted_count"] == 5
+    assert result["from_id"] == 1
+    assert result["to_id"] == 5
+    assert result["oldest_fetched_id"] == 1
+    assert result["older_history_uncached"] is True
 
 
 def test_bulk_fetch_history_bootstrap_flags_incomplete_when_iterator_hits_cap_with_filtered_messages(monkeypatch):
@@ -661,6 +736,7 @@ def test_search_global_resume_uses_peer_and_rate_cursor(monkeypatch):
         "offset_rate": 1,
     }
 
+    resume_start = len(client.calls)
     asyncio.run(
         _tool_from("search_messages_global")(
             query="launch",
@@ -671,8 +747,8 @@ def test_search_global_resume_uses_peer_and_rate_cursor(monkeypatch):
         )
     )
 
-    assert client.calls[-1]["offset_peer"] is resolved_peer
-    assert client.calls[-1]["offset_rate"] == 1
+    assert client.calls[resume_start]["offset_peer"] is resolved_peer
+    assert client.calls[resume_start]["offset_rate"] == 1
 
 
 def test_search_in_chat_resumes_cleanly_when_offset_id_passed_back(monkeypatch):

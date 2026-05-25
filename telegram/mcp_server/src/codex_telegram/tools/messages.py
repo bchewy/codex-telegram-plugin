@@ -218,9 +218,12 @@ async def _search_global_messages_window(
     collected = []
     scanned_count = 0
     stopped_at_lower_bound = False
+    target_count = limit + 1
+    last_scanned_offset: dict | None = None
+    last_returned_offset: dict | None = None
     next_offset: dict | None = None
 
-    while scanned_count < scan_limit and len(collected) < limit:
+    while scanned_count < scan_limit and len(collected) < target_count:
         response = await client(
             functions.messages.SearchGlobalRequest(
                 q=query,
@@ -253,7 +256,7 @@ async def _search_global_messages_window(
             current_offset_id = message.id
             current_offset_peer = getattr(message, "input_chat", None) or types.InputPeerEmpty()
             current_offset_rate = getattr(response, "next_rate", 0)
-            next_offset = {
+            last_scanned_offset = {
                 "date": to_iso(message.date),
                 "id": message.id,
                 "offset_peer": _message_offset_peer_ref(message),
@@ -266,23 +269,29 @@ async def _search_global_messages_window(
             if not _within_range(message, lower, upper):
                 continue
             collected.append(message)
-            if len(collected) >= limit:
+            if len(collected) <= limit:
+                last_returned_offset = last_scanned_offset
+            if len(collected) >= target_count:
                 break
 
-        if stopped_at_lower_bound or len(collected) >= limit:
+        if stopped_at_lower_bound or len(collected) >= target_count:
             break
         if not advanced:
             break
 
-    has_more = len(collected) >= limit and not stopped_at_lower_bound
+    has_more = len(collected) > limit and not stopped_at_lower_bound
     scan_limit_reached = scanned_count >= scan_limit and not stopped_at_lower_bound and not has_more
+    if has_more:
+        next_offset = last_returned_offset
+    elif scan_limit_reached:
+        next_offset = last_scanned_offset
 
     return {
         "messages": collected[:limit],
         "scanned_count": scanned_count,
         "has_more": has_more,
         "scan_limit_reached": scan_limit_reached,
-        "next_offset": next_offset if has_more or scan_limit_reached else None,
+        "next_offset": next_offset,
     }
 
 
@@ -340,6 +349,8 @@ async def _fetch_bulk_history_bootstrap(
     payloads: list[dict] = []
     deleted_count = 0
     raw_count = 0
+    raw_lowest_fetched_id: int | None = None
+    raw_highest_fetched_id: int | None = None
 
     iter_kwargs: dict = {"limit": max_messages}
     if until_message_id is not None:
@@ -349,6 +360,18 @@ async def _fetch_bulk_history_bootstrap(
 
     async for message in history_client.iter_messages(entity, **iter_kwargs):
         raw_count += 1
+        message_id = getattr(message, "id", None)
+        if message_id is not None:
+            raw_lowest_fetched_id = (
+                message_id
+                if raw_lowest_fetched_id is None
+                else min(raw_lowest_fetched_id, message_id)
+            )
+            raw_highest_fetched_id = (
+                message_id
+                if raw_highest_fetched_id is None
+                else max(raw_highest_fetched_id, message_id)
+            )
         if _is_empty_message(message):
             deleted_count += 1
         payload = _message_payload(
@@ -373,14 +396,14 @@ async def _fetch_bulk_history_bootstrap(
         "chat_ref": chat_ref_value,
         "count": len(payloads),
         "deleted_count": deleted_count,
-        "from_id": payloads[0]["id"] if payloads else None,
-        "to_id": payloads[-1]["id"] if payloads else None,
+        "from_id": payloads[0]["id"] if payloads else raw_lowest_fetched_id,
+        "to_id": payloads[-1]["id"] if payloads else raw_highest_fetched_id,
         "messages": payloads,
         "truncated": False,
         "next_since_message_id": None,
         "used_takeout": takeout,
         "older_history_uncached": older_history_uncached,
-        "oldest_fetched_id": payloads[0]["id"] if payloads else None,
+        "oldest_fetched_id": payloads[0]["id"] if payloads else raw_lowest_fetched_id,
     }
 
 
@@ -463,6 +486,8 @@ async def fetch_bulk_history_payload(
         semaphore = asyncio.Semaphore(concurrency)
         payloads: list[dict] = []
         deleted_count = 0
+        raw_lowest_fetched_id: int | None = None
+        raw_highest_fetched_id: int | None = None
         chunk_iter = _iter_message_id_chunks(start_id, highest_id)
         scan_complete = True
 
@@ -480,6 +505,18 @@ async def fetch_bulk_history_payload(
 
             for chunk_messages in batch_results:
                 for message in chunk_messages:
+                    message_id = getattr(message, "id", None)
+                    if message_id is not None:
+                        raw_lowest_fetched_id = (
+                            message_id
+                            if raw_lowest_fetched_id is None
+                            else min(raw_lowest_fetched_id, message_id)
+                        )
+                        raw_highest_fetched_id = (
+                            message_id
+                            if raw_highest_fetched_id is None
+                            else max(raw_highest_fetched_id, message_id)
+                        )
                     if _is_empty_message(message):
                         deleted_count += 1
                     payload = _message_payload(
@@ -501,14 +538,18 @@ async def fetch_bulk_history_payload(
 
         payloads.sort(key=lambda item: item["id"] or 0)
         payloads = payloads[:max_messages]
-        next_since_message_id = payloads[-1]["id"] if not scan_complete and payloads else None
+        next_since_message_id = (
+            payloads[-1]["id"]
+            if not scan_complete and payloads
+            else raw_highest_fetched_id if not scan_complete else None
+        )
 
         return {
             "chat_ref": chat_ref_value,
             "count": len(payloads),
             "deleted_count": deleted_count,
-            "from_id": payloads[0]["id"] if payloads else None,
-            "to_id": payloads[-1]["id"] if payloads else None,
+            "from_id": payloads[0]["id"] if payloads else raw_lowest_fetched_id,
+            "to_id": payloads[-1]["id"] if payloads else raw_highest_fetched_id,
             "messages": payloads,
             "truncated": not scan_complete,
             "next_since_message_id": next_since_message_id,
@@ -516,7 +557,7 @@ async def fetch_bulk_history_payload(
             # Forward-walk resumes from `since_message_id`, so this path
             # never leaves older history behind by design.
             "older_history_uncached": False,
-            "oldest_fetched_id": payloads[0]["id"] if payloads else None,
+            "oldest_fetched_id": payloads[0]["id"] if payloads else raw_lowest_fetched_id,
         }
 
 
