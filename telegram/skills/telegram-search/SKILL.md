@@ -1,17 +1,19 @@
 ---
 name: telegram-search
-description: Search Telegram messages by query, dialog, sender, or time window. Use when the user asks to find a message, locate discussion context, or answer a question from past Telegram chats.
+description: Cache-first search for Telegram messages by query, dialog, sender, or time window. Use for finding messages, locating discussion context, or answering questions from past chats; prefer cached search for known dialogs, broad/old windows, repeated searches, or exhaustive results.
 ---
 
-1. Convert the user’s request into a precise search query and decide whether it should be global or dialog-scoped.
-2. Use `search_messages_in_chat` when the target dialog is known; otherwise use `search_messages_global`.
-3. For exhaustive results in a large or long-lived chat, call `sync_chat_cache` first and then use `search_cache`. Keep `search_messages_in_chat` / `search_messages_global` for narrow or recent lookups.
-4. Narrow with `from_user`, `min_date`, and `max_date` whenever the user gives enough context.
-5. Return the best matches first with:
+1. Convert the user’s request into a precise search query, target dialog(s), sender filter, and time window.
+2. If the target dialog is known, prefer `search_cache` over live search. Pass `chat_ref`, `query`, `from_user`, `min_date`, `max_date`, `compact=True` for token-efficient result previews, and a freshness window such as `auto_sync_seconds=600` when recent messages may matter.
+3. If the target dialog is known but the user explicitly wants a full rebuild, call `sync_chat_cache(full=True)` first. Otherwise rely on incremental sync (`sync_chat_cache` or `search_cache(..., auto_sync_seconds=...)`).
+4. Use `search_messages_in_chat` only for narrow recent one-off lookups where cache setup is unnecessary. Use `search_messages_global` or `list_dialogs` only when the dialog is unknown, then switch to cached per-dialog search for deeper work.
+5. Narrow with `from_user`, `min_date`, `max_date`, and conservative `limit` values whenever the user gives enough context.
+6. Return the best matches first with:
    - short relevance note
    - sender
    - date
-   - chat name
+   - chat name or `chat_ref`
    - message snippet
-6. If the user’s request is ambiguous, show the top plausible matches instead of pretending there was one obvious answer.
-7. If the user wants the surrounding thread, use `get_message_context` first. Fall back to `get_history` only when they need a wider window than the local context tool returns.
+7. If `search_cache` returns `has_more` / `next_offset`, offer to continue from `next_offset` instead of rerunning the same search.
+8. If the user’s request is ambiguous, show the top plausible matches instead of pretending there was one obvious answer.
+9. If the user wants surrounding discussion, use thread-aware tools when available; otherwise use `get_message_context` for chronological neighbors and say that it is chronological context, not necessarily the reply/topic thread.

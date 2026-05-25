@@ -20,9 +20,8 @@ class _FuzzyClient:
     async def get_entity(self, _candidate):
         raise ValueError("not found")
 
-    async def get_dialogs(self, limit: int = 200):
-        assert limit == 200
-        return [SimpleNamespace(title="Launch Chat", entity=self._entity)]
+    async def iter_dialogs(self):
+        yield SimpleNamespace(title="Launch Chat", entity=self._entity)
 
 
 class _NumericWarmClient:
@@ -37,10 +36,10 @@ class _NumericWarmClient:
             raise ValueError("peer cache cold")
         return self._entity
 
-    async def get_dialogs(self, limit: int = 200):
-        assert limit == 200
+    async def iter_dialogs(self):
         self.dialog_warmups += 1
-        return []
+        return
+        yield  # unreachable; marks this as an async generator
 
 
 def test_resolve_entity_propagates_transport_failures():

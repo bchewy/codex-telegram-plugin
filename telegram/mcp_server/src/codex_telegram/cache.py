@@ -13,7 +13,7 @@ from .session_store import MASTER_KEY_ENV_VAR
 
 CACHE_ENCRYPT_ENV_VAR = "CODEX_TELEGRAM_CACHE_ENCRYPT"
 CACHE_FILE_NAME = "cache.db"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _MIGRATIONS = {
     1: """
@@ -58,6 +58,10 @@ _MIGRATIONS = {
       VALUES ('delete', old.rowid, old.text);
       INSERT INTO messages_fts(rowid, text) VALUES (new.rowid, new.text);
     END;
+    """,
+    2: """
+    CREATE INDEX IF NOT EXISTS idx_msg_chat_date_id ON messages(chat_ref, date, id);
+    CREATE INDEX IF NOT EXISTS idx_msg_reply ON messages(chat_ref, reply_to_id);
     """,
 }
 
@@ -226,19 +230,29 @@ def search_cached_messages(
     min_date: str | None = None,
     max_date: str | None = None,
     limit: int = 100,
+    offset: int = 0,
+    compact: bool = False,
+    text_limit: int = 240,
+    snippet_tokens: int = 12,
 ) -> list[dict[str, Any]]:
     if limit <= 0:
         return []
+    if offset < 0:
+        raise ValueError("offset must be >= 0")
+    if text_limit <= 0:
+        raise ValueError("text_limit must be > 0")
 
     lower, upper = _timestamp_bounds(min_date, max_date)
+    select_params: list[Any] = []
     params: list[Any] = []
     where: list[str] = []
+    fts_query = _fts_match_query(query or "")
 
-    if query:
+    if fts_query:
         from_clause = "FROM messages JOIN messages_fts ON messages_fts.rowid = messages.rowid"
         where.append("messages_fts MATCH ?")
-        params.append(_fts_match_query(query))
-        order_by = "ORDER BY bm25(messages_fts), messages.date DESC, messages.id DESC"
+        params.append(fts_query)
+        order_by = "ORDER BY rank, messages.date DESC, messages.id DESC"
     else:
         from_clause = "FROM messages"
         order_by = "ORDER BY messages.date DESC, messages.id DESC"
@@ -256,13 +270,115 @@ def search_cached_messages(
         where.append("messages.date <= ?")
         params.append(upper)
 
-    sql = f"SELECT messages.raw_json {from_clause}"
+    if compact:
+        if fts_query:
+            select_clause = (
+                "SELECT messages.chat_ref, messages.id, messages.date, messages.sender_ref, "
+                "messages.sender_name, messages.text, messages.reply_to_id, "
+                "snippet(messages_fts, 0, '[', ']', '…', ?) AS snippet, "
+                "bm25(messages_fts) AS rank "
+            )
+            select_params.append(snippet_tokens)
+        else:
+            select_clause = (
+                "SELECT messages.chat_ref, messages.id, messages.date, messages.sender_ref, "
+                "messages.sender_name, messages.text, messages.reply_to_id, "
+                "NULL AS snippet, NULL AS rank "
+            )
+    else:
+        if fts_query:
+            select_clause = "SELECT messages.raw_json, bm25(messages_fts) AS rank "
+        else:
+            select_clause = "SELECT messages.raw_json, NULL AS rank "
+
+    sql = f"{select_clause}{from_clause}"
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += f" {order_by} LIMIT ?"
-    params.append(limit)
+    sql += f" {order_by} LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
 
-    rows = connection.execute(sql, params).fetchall()
+    rows = connection.execute(sql, [*select_params, *params]).fetchall()
+    if not compact:
+        return [json.loads(row["raw_json"]) for row in rows]
+
+    results = []
+    for row in rows:
+        text = row["text"] or ""
+        preview = text if len(text) <= text_limit else text[: text_limit - 1].rstrip() + "…"
+        results.append(
+            {
+                "chat_ref": row["chat_ref"],
+                "id": row["id"],
+                "date": to_iso(datetime.fromtimestamp(row["date"], tz=UTC)),
+                "sender_ref": row["sender_ref"],
+                "sender_name": row["sender_name"],
+                "reply_to_message_id": row["reply_to_id"],
+                "text": preview,
+                "snippet": row["snippet"],
+                "rank": row["rank"],
+            }
+        )
+    return results
+
+
+def _cached_message_where(
+    *,
+    chat_ref: str,
+    min_date: str | None = None,
+    max_date: str | None = None,
+) -> tuple[str, list[Any]]:
+    lower, upper = _timestamp_bounds(min_date, max_date)
+    params: list[Any] = [chat_ref]
+    where = ["chat_ref = ?"]
+    if lower is not None:
+        where.append("date >= ?")
+        params.append(lower)
+    if upper is not None:
+        where.append("date <= ?")
+        params.append(upper)
+    return " AND ".join(where), params
+
+
+def count_cached_messages(
+    connection,
+    *,
+    chat_ref: str,
+    min_date: str | None = None,
+    max_date: str | None = None,
+) -> int:
+    where_sql, params = _cached_message_where(
+        chat_ref=chat_ref,
+        min_date=min_date,
+        max_date=max_date,
+    )
+    row = connection.execute(
+        f"SELECT COUNT(*) AS count FROM messages WHERE {where_sql}",
+        params,
+    ).fetchone()
+    return int(row["count"] or 0)
+
+
+def load_cached_message_chunk(
+    connection,
+    *,
+    chat_ref: str,
+    min_date: str | None = None,
+    max_date: str | None = None,
+    limit: int = 500,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+    if offset < 0:
+        raise ValueError("offset must be >= 0")
+
+    where_sql, params = _cached_message_where(
+        chat_ref=chat_ref,
+        min_date=min_date,
+        max_date=max_date,
+    )
+    sql = f"SELECT raw_json FROM messages WHERE {where_sql} ORDER BY date ASC, id ASC LIMIT ? OFFSET ?"
+    rows = connection.execute(sql, [*params, limit, offset]).fetchall()
     return [json.loads(row["raw_json"]) for row in rows]
 
 
@@ -273,20 +389,20 @@ def load_cached_messages(
     min_date: str | None = None,
     max_date: str | None = None,
 ) -> list[dict[str, Any]]:
-    lower, upper = _timestamp_bounds(min_date, max_date)
-    params: list[Any] = [chat_ref]
-    where = ["chat_ref = ?"]
-    if lower is not None:
-        where.append("date >= ?")
-        params.append(lower)
-    if upper is not None:
-        where.append("date <= ?")
-        params.append(upper)
-
-    sql = "SELECT raw_json FROM messages WHERE " + " AND ".join(where)
-    sql += " ORDER BY date ASC, id ASC"
-    rows = connection.execute(sql, params).fetchall()
-    return [json.loads(row["raw_json"]) for row in rows]
+    total = count_cached_messages(
+        connection,
+        chat_ref=chat_ref,
+        min_date=min_date,
+        max_date=max_date,
+    )
+    return load_cached_message_chunk(
+        connection,
+        chat_ref=chat_ref,
+        min_date=min_date,
+        max_date=max_date,
+        limit=total,
+        offset=0,
+    )
 
 
 def aggregate_cached_messages(

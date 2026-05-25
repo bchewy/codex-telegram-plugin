@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import os
 from pathlib import Path
 
 from telethon import functions
@@ -22,6 +25,49 @@ async def _resolve_message(client, chat_ref: str, message_id: int):
     if not message:
         raise RuntimeError(f"Message {message_id} was not found in {chat_ref}.")
     return entity, message
+
+
+def _resolve_skill_script(name: str) -> Path:
+    override = os.getenv("CODEX_TELEGRAM_MEDIA_SCRIPTS_DIR")
+    if override:
+        candidate = (Path(override).expanduser() / name).resolve()
+        if candidate.exists():
+            return candidate
+        raise FileNotFoundError(f"could not locate skill script {name} in {candidate.parent}")
+
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "skills" / "telegram-media-inspect" / "scripts" / name
+        if candidate.exists():
+            return candidate
+
+    raise FileNotFoundError(f"could not locate skill script {name}")
+
+
+async def _inspect_media_file(script: Path, media_path: str | Path, output_dir: Path | None = None) -> dict:
+    command = ["bash", str(script), str(media_path)]
+    if output_dir is not None:
+        command.append(str(output_dir))
+
+    proc = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+
+    if proc.returncode != 0:
+        error = stderr.decode().strip() or f"{script.name} failed"
+        raise RuntimeError(error)
+
+    lines = [line.strip() for line in stdout.decode().splitlines() if line.strip()]
+    if not lines:
+        raise RuntimeError(f"{script.name} did not return a JSON payload")
+
+    try:
+        return json.loads(lines[-1])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{script.name} returned invalid JSON") from exc
 
 
 def register(mcp) -> None:
@@ -272,6 +318,32 @@ def register(mcp) -> None:
             "message_id": message_id,
             "message": message_to_dict(message),
         }
+
+    @mcp.tool()
+    @with_flood_wait
+    async def inspect_message_media(
+        chat_ref: str,
+        message_id: int,
+        output_dir: str | None = None,
+    ) -> dict:
+        """Download a Telegram media message and return transcript/contact-sheet paths."""
+        client = await get_client()
+        entity, message = await _resolve_message(client, chat_ref, message_id)
+        download_dir = ensure_download_dir(output_dir)
+        file_path = await client.download_media(message, file=download_dir)
+        if not file_path:
+            raise RuntimeError(f"Message {message_id} did not produce a downloadable media file.")
+
+        inspect_output_dir = download_dir if output_dir else None
+        payload = await _inspect_media_file(
+            _resolve_skill_script("inspect_bubble.sh"),
+            file_path,
+            inspect_output_dir,
+        )
+        payload["chat_ref"] = peer_ref(entity)
+        payload["message_id"] = message_id
+        payload["downloaded_to"] = str(file_path)
+        return payload
 
     @mcp.tool()
     @with_flood_wait

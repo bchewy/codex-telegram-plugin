@@ -5,8 +5,8 @@ Use your personal Telegram account inside Codex.
 This plugin lets Codex:
 
 - summarize chats
-- search message history
-- cache large chat histories locally for fast repeat search and aggregation
+- search recent messages live, or search cached chat history for repeat/broad/old lookups
+- sync recent chat history into a local cache once, then summarize, search, and aggregate locally to reduce repeated Telegram API calls (see the cache section below — first sync covers the newest N messages; older backfill is not yet exposed)
 - draft and send replies
 - triage unread threads
 - manage groups/channels
@@ -72,6 +72,7 @@ You should see:
 - `Telegram Summarize`
 - `Telegram Triage Unread`
 - `Telegram Search`
+- `Telegram Aggregate`
 - `Telegram Send`
 - `Telegram Manage Groups`
 - `Telegram Media Inspect`
@@ -164,6 +165,10 @@ Start a fresh Codex thread and try one of these:
 ```
 
 ```text
+@Telegram cache the Design chat, then search it for launch blockers from last month
+```
+
+```text
 @Telegram draft a Telegram reply to the design thread
 ```
 
@@ -179,6 +184,10 @@ $telegram:telegram-summarize summarize my unread Telegram messages from today
 
 ```text
 $telegram:telegram-search find messages from Alice about launch
+```
+
+```text
+$telegram:telegram-aggregate show cached weekly message volume for the Design chat this quarter
 ```
 
 ```text
@@ -271,14 +280,18 @@ Do not pass the master key as a CLI flag. It ends up in shell history and `ps`.
 | `CODEX_TELEGRAM_UPLOAD_DIR`        | Upload sandbox for `send_*` and `set_profile_photo`. Files outside this directory require `allow_arbitrary_path=True`.                        |
 
 
-## Local cache
+## Local cache: use it for broad, old, repeated, or aggregate work
 
-Large-history workflows can now use a local SQLite cache at `~/.cache/codex-telegram/cache.db`.
+The local SQLite cache lives at `~/.cache/codex-telegram/cache.db` and is per chat.
+Use live search for quick recent lookups or when you do not know the dialog yet. Use the cache when the dialog is known and the task is broad, old, repeated, exhaustive, a summary, or an aggregate.
 
-- `sync_chat_cache` mirrors one chat into the cache
-- `search_cache` runs FTS5 keyword search against cached messages
-- `aggregate_cache` returns counts by day, week, or sender
-- `summarize_chat_history` returns chunked cache-backed batches for map-reduce summaries
+- `cache_status` shows which chats are cached, message counts, and last sync times.
+- `sync_chat_cache(chat_ref)` incrementally adds new messages for one chat. Use `full=True` only when you intentionally want to rebuild that chat’s cache. The first sync of a chat fetches the newest `max_messages_per_batch` messages (default 5000) via offset pagination — for chats larger than that batch, the response sets `older_history_uncached: true` and exposes `oldest_fetched_id` so callers can detect the cap; older history is not currently backfilled by this tool.
+- `search_cache(chat_ref, query, from_user, min_date, max_date, auto_sync_seconds=600, compact=True)` searches locally and can auto-sync the chat first if the cache is missing or stale. Use `compact=True` for token-efficient previews; use `next_offset` to continue paginated results.
+- `summarize_chat_history(chat_ref, min_date, max_date, chunk_index=0)` returns SQL-paginated cache-backed chunks for map-reduce summaries.
+- `aggregate_cache(chat_ref, min_date, max_date, group_by="day|week|sender")` returns local counts without re-querying Telegram.
+
+For unknown-dialog searches, first use live search or `list_dialogs` to identify candidate chats, then sync/search those chats through the cache.
 
 If you want the cache encrypted at rest, install `pysqlcipher3`, set `CODEX_TELEGRAM_CACHE_ENCRYPT=1`, and provide `CODEX_TELEGRAM_MASTER_KEY`.
 
