@@ -55,6 +55,17 @@ def test_resolve_skill_script_uses_env_override(monkeypatch, tmp_path):
     assert media._resolve_skill_script("inspect_bubble.sh") == script.resolve()
 
 
+def test_resolve_skill_script_rejects_directory_override(monkeypatch, tmp_path):
+    script_dir = tmp_path / "scripts"
+    script_dir.mkdir()
+    (script_dir / "inspect_bubble.sh").mkdir()
+
+    monkeypatch.setenv("CODEX_TELEGRAM_MEDIA_SCRIPTS_DIR", str(script_dir))
+
+    with pytest.raises(FileNotFoundError):
+        media._resolve_skill_script("inspect_bubble.sh")
+
+
 def test_resolve_skill_script_walks_up_to_plugin_root(monkeypatch, tmp_path):
     plugin_root = tmp_path / "telegram"
     script = plugin_root / "skills" / "telegram-media-inspect" / "scripts" / "inspect_bubble.sh"
@@ -141,4 +152,14 @@ def test_inspect_media_file_raises_for_nonzero_exit(monkeypatch):
     monkeypatch.setattr(media.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
     with pytest.raises(RuntimeError, match="boom"):
+        asyncio.run(media._inspect_media_file(Path("/fake/inspect_bubble.sh"), "/tmp/video.mp4"))
+
+
+def test_inspect_media_file_rejects_non_object_json(monkeypatch):
+    async def fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess(returncode=0, stderr=b"", stdout=b'["not", "an", "object"]\n')
+
+    monkeypatch.setattr(media.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    with pytest.raises(RuntimeError, match="expected object"):
         asyncio.run(media._inspect_media_file(Path("/fake/inspect_bubble.sh"), "/tmp/video.mp4"))

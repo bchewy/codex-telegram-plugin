@@ -31,14 +31,14 @@ def _resolve_skill_script(name: str) -> Path:
     override = os.getenv("CODEX_TELEGRAM_MEDIA_SCRIPTS_DIR")
     if override:
         candidate = (Path(override).expanduser() / name).resolve()
-        if candidate.exists():
+        if candidate.is_file():
             return candidate
         raise FileNotFoundError(f"could not locate skill script {name} in {candidate.parent}")
 
     here = Path(__file__).resolve()
     for parent in here.parents:
         candidate = parent / "skills" / "telegram-media-inspect" / "scripts" / name
-        if candidate.exists():
+        if candidate.is_file():
             return candidate
 
     raise FileNotFoundError(f"could not locate skill script {name}")
@@ -65,9 +65,14 @@ async def _inspect_media_file(script: Path, media_path: str | Path, output_dir: 
         raise RuntimeError(f"{script.name} did not return a JSON payload")
 
     try:
-        return json.loads(lines[-1])
+        payload = json.loads(lines[-1])
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"{script.name} returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            f"{script.name} returned JSON {type(payload).__name__}, expected object"
+        )
+    return payload
 
 
 def register(mcp) -> None:
@@ -340,6 +345,8 @@ def register(mcp) -> None:
             file_path,
             inspect_output_dir,
         )
+        if not isinstance(payload, dict):
+            raise RuntimeError("inspect_bubble.sh returned JSON that is not an object")
         payload["chat_ref"] = peer_ref(entity)
         payload["message_id"] = message_id
         payload["downloaded_to"] = str(file_path)

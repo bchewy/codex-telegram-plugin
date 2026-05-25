@@ -4,12 +4,13 @@ import asyncio
 from datetime import timedelta
 from itertools import islice
 
-from telethon import errors, types
+from telethon import errors, functions, types, utils as tg_utils
 
 from ..client import (
     TelegramFloodWaitError,
     get_client,
     get_history_client,
+    invalidate_dialog_cache,
     list_all_dialogs,
     with_flood_wait,
 )
@@ -22,6 +23,7 @@ from ..helpers import (
     peer_ref,
     resolve_entity,
     resolve_entity_fuzzy,
+    resolve_input_peer,
     to_iso,
 )
 from ..safety import require_destructive
@@ -157,6 +159,130 @@ async def _search_messages_window(
         "has_more": has_more,
         "scan_limit_reached": scan_limit_reached,
         "next_offset": next_offset,
+    }
+
+
+def _message_offset_peer_ref(message) -> str | None:
+    for peer in (getattr(message, "input_chat", None), getattr(message, "peer_id", None)):
+        if peer is None:
+            continue
+        try:
+            return peer_ref(peer)
+        except TypeError:
+            continue
+    return None
+
+
+async def _search_global_messages_window(
+    client,
+    *,
+    query: str,
+    limit: int,
+    min_date: str | None = None,
+    max_date: str | None = None,
+    scan_limit: int = 1_000,
+    offset_id: int = 0,
+    offset_peer: str | None = None,
+    offset_rate: int = 0,
+) -> dict:
+    if not query or not query.strip():
+        raise ValueError("query must not be blank")
+    if offset_id < 0:
+        raise ValueError("offset_id must be >= 0")
+    if offset_rate < 0:
+        raise ValueError("offset_rate must be >= 0")
+    if limit <= 0:
+        return {
+            "messages": [],
+            "scanned_count": 0,
+            "has_more": False,
+            "scan_limit_reached": False,
+            "next_offset": None,
+        }
+    if scan_limit <= 0:
+        raise ValueError("scan_limit must be > 0")
+
+    lower = parse_datetime(min_date)
+    upper = parse_datetime(max_date)
+    _validate_date_window(lower, upper)
+
+    current_offset_peer = (
+        await resolve_input_peer(client, offset_peer)
+        if offset_peer
+        else types.InputPeerEmpty()
+    )
+    current_offset_id = offset_id
+    current_offset_rate = offset_rate
+    request_max_date = upper + _ONE_MICROSECOND if upper else None
+
+    collected = []
+    scanned_count = 0
+    stopped_at_lower_bound = False
+    next_offset: dict | None = None
+
+    while scanned_count < scan_limit and len(collected) < limit:
+        response = await client(
+            functions.messages.SearchGlobalRequest(
+                q=query,
+                filter=types.InputMessagesFilterEmpty(),
+                min_date=lower,
+                max_date=request_max_date,
+                offset_rate=current_offset_rate,
+                offset_peer=current_offset_peer,
+                offset_id=current_offset_id,
+                limit=1,
+            )
+        )
+        raw_messages = getattr(response, "messages", [])
+        if not raw_messages:
+            break
+
+        entities = {
+            tg_utils.get_peer_id(entity): entity
+            for entity in [*getattr(response, "users", []), *getattr(response, "chats", [])]
+        }
+        advanced = False
+        for message in raw_messages:
+            if isinstance(message, types.MessageEmpty):
+                continue
+            if hasattr(message, "_finish_init"):
+                message._finish_init(client, entities, None)
+
+            scanned_count += 1
+            advanced = True
+            current_offset_id = message.id
+            current_offset_peer = getattr(message, "input_chat", None) or types.InputPeerEmpty()
+            current_offset_rate = getattr(response, "next_rate", 0)
+            next_offset = {
+                "date": to_iso(message.date),
+                "id": message.id,
+                "offset_peer": _message_offset_peer_ref(message),
+                "offset_rate": current_offset_rate,
+            }
+
+            if lower and message.date < lower:
+                stopped_at_lower_bound = True
+                break
+            if not _within_range(message, lower, upper):
+                continue
+            collected.append(message)
+            if len(collected) >= limit:
+                break
+
+        if stopped_at_lower_bound or len(collected) >= limit:
+            break
+        if not advanced:
+            break
+
+    has_more = len(collected) >= limit and not stopped_at_lower_bound
+    scan_limit_reached = scanned_count >= scan_limit and not stopped_at_lower_bound and not has_more
+
+    return {
+        "messages": collected[:limit],
+        "scanned_count": scanned_count,
+        "has_more": has_more,
+        "scan_limit_reached": scan_limit_reached,
+        "next_offset": next_offset if has_more or scan_limit_reached else None,
     }
 
 
@@ -574,7 +700,7 @@ def register(mcp) -> None:
                     # error would swallow task cancellation and shutdown.
                     raise item
 
-            for dialog, item in zip(batch, fetched):
+            for dialog, item in zip(batch, fetched, strict=True):
                 if remaining <= 0:
                     break
                 if isinstance(item, Exception):
@@ -612,23 +738,26 @@ def register(mcp) -> None:
         max_date: str | None = None,
         scan_limit: int = 1_000,
         offset_id: int = 0,
+        offset_peer: str | None = None,
+        offset_rate: int = 0,
     ) -> dict:
-        """Search across all dialogs with bounded pagination through the date window.
+        """Search across all dialogs with bounded global-search pagination.
 
-        To resume from a previous call, pass `offset_id` from the previous
-        response's `next_offset.id`. The cursor uses Telegram's exclusive
-        message-id ordering so messages are never returned twice.
+        To resume from a previous call, pass `offset_id`, `offset_peer`, and
+        `offset_rate` from `next_offset`. Telegram global search uses all three
+        cursor fields because message ids are scoped per dialog.
         """
         client = await get_client()
-        result = await _search_messages_window(
+        result = await _search_global_messages_window(
             client,
-            None,
             query=query,
             limit=limit,
             min_date=min_date,
             max_date=max_date,
             scan_limit=scan_limit,
             offset_id=offset_id,
+            offset_peer=offset_peer,
+            offset_rate=offset_rate,
         )
         found = result["messages"]
         return {
@@ -847,6 +976,7 @@ def register(mcp) -> None:
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
         await client.send_read_acknowledge(entity, max_id=message_id)
+        invalidate_dialog_cache(client)
         return {"chat_ref": peer_ref(entity), "max_id": message_id, "marked_read": True}
 
     @mcp.tool()

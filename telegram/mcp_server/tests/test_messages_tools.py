@@ -69,6 +69,29 @@ class _SearchClient:
         self.messages_to_yield = messages_to_yield
         self.calls = []
 
+    async def __call__(self, request):
+        self.calls.append(
+            {
+                "request_type": type(request).__name__,
+                "search": request.q,
+                "min_date": request.min_date,
+                "max_date": request.max_date,
+                "offset_id": request.offset_id,
+                "offset_peer": request.offset_peer,
+                "offset_rate": request.offset_rate,
+                "limit": request.limit,
+            }
+        )
+        for item in self.messages_to_yield:
+            if request.max_date and item.date >= request.max_date:
+                continue
+            if request.min_date and item.date < request.min_date:
+                continue
+            if request.offset_id and item.id >= request.offset_id:
+                continue
+            return SimpleNamespace(messages=[item], users=[], chats=[], next_rate=len(self.calls))
+        return SimpleNamespace(messages=[], users=[], chats=[], next_rate=0)
+
     async def iter_messages(
         self,
         entity,
@@ -287,8 +310,8 @@ def test_search_global_reports_more_results_without_overfetching_payload(monkeyp
     assert result["count"] == 2
     assert result["messages"] == [{"id": 5}, {"id": 4}]
     assert result["has_more"] is True
-    assert result["scanned_count"] == 3
-    assert client.calls[0]["entity"] is None
+    assert result["scanned_count"] == 2
+    assert client.calls[0]["request_type"] == "SearchGlobalRequest"
 
 
 def test_get_unread_returns_flat_messages_list_for_global_mode(monkeypatch):
@@ -600,7 +623,56 @@ def test_search_global_returns_next_offset_when_scan_limit_reached(monkeypatch):
     assert result["count"] == 2
     assert result["has_more"] is False
     assert result["scan_limit_reached"] is True
-    assert result["next_offset"] == {"date": "2026-04-19T00:00:00+00:00", "id": 19}
+    assert result["next_offset"] == {
+        "date": "2026-04-19T00:00:00+00:00",
+        "id": 19,
+        "offset_peer": None,
+        "offset_rate": 2,
+    }
+
+
+def test_search_global_resume_uses_peer_and_rate_cursor(monkeypatch):
+    peer = messages.types.InputPeerChannel(123, 456)
+    search_messages = [
+        SimpleNamespace(
+            id=20,
+            date=datetime(2026, 4, 20, tzinfo=UTC),
+            input_chat=peer,
+            peer_id=messages.types.PeerChannel(123),
+        ),
+        SimpleNamespace(
+            id=19,
+            date=datetime(2026, 4, 19, tzinfo=UTC),
+            input_chat=messages.types.InputPeerChannel(456, 789),
+            peer_id=messages.types.PeerChannel(456),
+        ),
+    ]
+    client = _SearchClient(search_messages)
+    resolved_peer = object()
+    monkeypatch.setattr(messages, "get_client", _async_value(client))
+    monkeypatch.setattr(messages, "resolve_input_peer", _async_value(resolved_peer))
+    monkeypatch.setattr(messages, "iter_message_dicts", lambda items: [{"id": item.id} for item in items])
+
+    first = asyncio.run(_tool_from("search_messages_global")(query="launch", limit=1))
+    assert first["next_offset"] == {
+        "date": "2026-04-20T00:00:00+00:00",
+        "id": 20,
+        "offset_peer": "channel:123",
+        "offset_rate": 1,
+    }
+
+    asyncio.run(
+        _tool_from("search_messages_global")(
+            query="launch",
+            limit=1,
+            offset_id=first["next_offset"]["id"],
+            offset_peer=first["next_offset"]["offset_peer"],
+            offset_rate=first["next_offset"]["offset_rate"],
+        )
+    )
+
+    assert client.calls[-1]["offset_peer"] is resolved_peer
+    assert client.calls[-1]["offset_rate"] == 1
 
 
 def test_search_in_chat_resumes_cleanly_when_offset_id_passed_back(monkeypatch):
