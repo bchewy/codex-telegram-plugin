@@ -33,11 +33,11 @@ fi
 mkdir -p "$OUTPUT_DIR" "$CACHE_ROOT"
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
-  python3 -m venv "$VENV_DIR"
+  python3 -m venv "$VENV_DIR" >&2
 fi
 
 if ! "$PYTHON_BIN" -c "import whisper" >/dev/null 2>&1; then
-  "$PIP_BIN" install --disable-pip-version-check openai-whisper
+  "$PIP_BIN" install --disable-pip-version-check openai-whisper >&2
 fi
 
 CMD=(
@@ -45,16 +45,23 @@ CMD=(
   "$MEDIA_PATH"
   "--model" "$WHISPER_MODEL"
   "--output_dir" "$OUTPUT_DIR"
+  "--output_format" "txt"
 )
 
 if [[ -n "$WHISPER_LANGUAGE" ]]; then
   CMD+=("--language" "$WHISPER_LANGUAGE")
 fi
 
-"${CMD[@]}"
+"${CMD[@]}" >&2
 
 BASENAME="$(basename "$MEDIA_PATH")"
-STEM="${BASENAME%.*}"
+STEM="$(python3 - <<'PY' "$MEDIA_PATH"
+import os
+import sys
+
+print(os.path.splitext(os.path.basename(sys.argv[1]))[0])
+PY
+)"
 TXT_PATH="${OUTPUT_DIR}/${STEM}.txt"
 
 if [[ -f "$TXT_PATH" ]]; then

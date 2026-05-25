@@ -22,3 +22,6 @@ local/
 *.session-journal
 .omx/
 .claude/
+
+# CodeDB MCP local index — generated artifact, not source
+codedb.snapshot

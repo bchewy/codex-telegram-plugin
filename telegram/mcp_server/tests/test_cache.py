@@ -92,6 +92,141 @@ def test_cache_search_and_aggregate_workflows():
     ]
 
 
+def test_cached_message_chunk_paginates_without_loading_all_messages():
+    connection = cache.connect_cache(":memory:")
+    try:
+        cache.ensure_cache_schema(connection)
+        with connection:
+            cache.upsert_cached_messages(
+                connection,
+                [
+                    _payload(3, day=19, text="three"),
+                    _payload(1, day=18, text="one"),
+                    _payload(2, day=18, text="two"),
+                    _payload(4, day=20, text="four"),
+                ],
+            )
+
+        total = cache.count_cached_messages(connection, chat_ref="chat:1")
+        chunk = cache.load_cached_message_chunk(
+            connection,
+            chat_ref="chat:1",
+            limit=2,
+            offset=1,
+        )
+    finally:
+        connection.close()
+
+    assert total == 4
+    assert [item["id"] for item in chunk] == [2, 3]
+
+
+def test_search_cached_messages_compact_results_include_snippet_and_pagination():
+    connection = cache.connect_cache(":memory:")
+    try:
+        cache.ensure_cache_schema(connection)
+        with connection:
+            cache.upsert_cached_messages(
+                connection,
+                [
+                    _payload(1, day=18, text="launch plan with a long enough surrounding sentence"),
+                    _payload(2, day=19, text="launch checklist"),
+                    _payload(3, day=20, text="unrelated"),
+                ],
+            )
+
+        results = cache.search_cached_messages(
+            connection,
+            chat_ref="chat:1",
+            query="launch",
+            limit=1,
+            offset=0,
+            compact=True,
+            text_limit=8,
+        )
+        next_results = cache.search_cached_messages(
+            connection,
+            chat_ref="chat:1",
+            query="launch",
+            limit=1,
+            offset=1,
+            compact=True,
+        )
+    finally:
+        connection.close()
+
+    assert len(results) == 1
+    assert set(results[0]) == {
+        "chat_ref",
+        "id",
+        "date",
+        "sender_ref",
+        "sender_name",
+        "reply_to_message_id",
+        "text",
+        "snippet",
+        "rank",
+    }
+    assert "[launch]" in results[0]["snippet"]
+    assert results[0]["text"].endswith("…")
+    assert len(next_results) == 1
+    assert next_results[0]["id"] != results[0]["id"]
+
+
+def test_search_cache_tool_defaults_to_full_payload_and_paginates(monkeypatch, tmp_path: Path):
+    db_path = tmp_path / "cache.db"
+    connection = cache.connect_cache(db_path)
+    try:
+        cache.ensure_cache_schema(connection)
+        with connection:
+            cache.upsert_cached_messages(
+                connection,
+                [
+                    _payload(1, day=18, text="launch one"),
+                    _payload(2, day=19, text="launch two"),
+                    _payload(3, day=20, text="launch three"),
+                ],
+            )
+            cache.update_chat_sync_state(connection, "chat:1", 3)
+    finally:
+        connection.close()
+
+    monkeypatch.setattr(cache_tools, "_canonical_chat_ref", lambda chat_ref: asyncio.sleep(0, result="chat:1"))
+    monkeypatch.setattr(cache_tools, "_sender_ref", lambda from_user: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(cache_tools, "connect_cache", lambda: cache.connect_cache(db_path))
+
+    first = asyncio.run(_tool_from("search_cache")(chat_ref="chat:1", query="launch", limit=2))
+    second = asyncio.run(
+        _tool_from("search_cache")(
+            chat_ref="chat:1",
+            query="launch",
+            limit=2,
+            offset=first["next_offset"],
+            compact=True,
+        )
+    )
+
+    assert first["compact"] is False
+    assert first["count"] == 2
+    assert first["has_more"] is True
+    assert first["next_offset"] == 2
+    assert "raw_text" in first["messages"][0]
+    assert second["compact"] is True
+    assert second["count"] == 1
+    assert second["next_offset"] is None
+    assert set(second["messages"][0]) == {
+        "chat_ref",
+        "id",
+        "date",
+        "sender_ref",
+        "sender_name",
+        "reply_to_message_id",
+        "text",
+        "snippet",
+        "rank",
+    }
+
+
 def test_connect_cache_rejects_missing_sqlcipher(monkeypatch):
     monkeypatch.setenv(cache.CACHE_ENCRYPT_ENV_VAR, "1")
     monkeypatch.setattr(
