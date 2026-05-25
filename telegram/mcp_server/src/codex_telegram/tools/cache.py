@@ -292,8 +292,8 @@ def register(mcp) -> None:
                 "chunk_index": chunk_index,
                 "chunk_count": chunk_count,
                 "next_chunk_index": chunk_index + 1 if chunk_index + 1 < chunk_count else None,
-                "from_id": chunk[0]["id"],
-                "to_id": chunk[-1]["id"],
+                "from_id": chunk[0]["id"] if chunk else None,
+                "to_id": chunk[-1]["id"] if chunk else None,
                 "messages": chunk,
             }
         finally:

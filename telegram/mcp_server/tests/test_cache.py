@@ -296,3 +296,26 @@ def test_sync_chat_cache_advances_delta_cursor(monkeypatch, tmp_path: Path):
     assert state is not None
     assert state["max_cached_id"] == 3
     assert message_count == 3
+
+
+def test_summarize_chat_history_handles_empty_chunk_after_count(monkeypatch, tmp_path: Path):
+    db_path = tmp_path / "cache.db"
+    connection = cache.connect_cache(db_path)
+    try:
+        cache.ensure_cache_schema(connection)
+        with connection:
+            cache.update_chat_sync_state(connection, "chat:1", 10)
+    finally:
+        connection.close()
+
+    monkeypatch.setattr(cache_tools, "_canonical_chat_ref", lambda chat_ref: asyncio.sleep(0, result="chat:1"))
+    monkeypatch.setattr(cache_tools, "connect_cache", lambda: cache.connect_cache(db_path))
+    monkeypatch.setattr(cache_tools, "count_cached_messages", lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr(cache_tools, "load_cached_message_chunk", lambda *_args, **_kwargs: [])
+
+    result = asyncio.run(_tool_from("summarize_chat_history")(chat_ref="chat:1"))
+
+    assert result["message_count"] == 1
+    assert result["from_id"] is None
+    assert result["to_id"] is None
+    assert result["messages"] == []
