@@ -173,6 +173,17 @@ def _message_offset_peer_ref(message) -> str | None:
     return None
 
 
+def _global_search_offset_rate(response, message) -> int:
+    next_rate = getattr(response, "next_rate", None)
+    if next_rate is not None:
+        return next_rate
+
+    message_date = getattr(message, "date", None)
+    if message_date is None:
+        return 0
+    return int(message_date.timestamp())
+
+
 async def _search_global_messages_window(
     client,
     *,
@@ -255,7 +266,7 @@ async def _search_global_messages_window(
             advanced = True
             current_offset_id = message.id
             current_offset_peer = getattr(message, "input_chat", None) or types.InputPeerEmpty()
-            current_offset_rate = getattr(response, "next_rate", 0)
+            current_offset_rate = _global_search_offset_rate(response, message)
             last_scanned_offset = {
                 "date": to_iso(message.date),
                 "id": message.id,

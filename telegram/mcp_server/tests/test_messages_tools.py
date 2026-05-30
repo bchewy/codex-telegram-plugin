@@ -65,8 +65,9 @@ class _HistoryClient:
 
 
 class _SearchClient:
-    def __init__(self, messages_to_yield):
+    def __init__(self, messages_to_yield, *, include_next_rate: bool = True):
         self.messages_to_yield = messages_to_yield
+        self.include_next_rate = include_next_rate
         self.calls = []
 
     async def __call__(self, request):
@@ -89,8 +90,14 @@ class _SearchClient:
                 continue
             if request.offset_id and item.id >= request.offset_id:
                 continue
-            return SimpleNamespace(messages=[item], users=[], chats=[], next_rate=len(self.calls))
-        return SimpleNamespace(messages=[], users=[], chats=[], next_rate=0)
+            response = SimpleNamespace(messages=[item], users=[], chats=[])
+            if self.include_next_rate:
+                response.next_rate = len(self.calls)
+            return response
+        response = SimpleNamespace(messages=[], users=[], chats=[])
+        if self.include_next_rate:
+            response.next_rate = 0
+        return response
 
     async def iter_messages(
         self,
@@ -749,6 +756,32 @@ def test_search_global_resume_uses_peer_and_rate_cursor(monkeypatch):
 
     assert client.calls[resume_start]["offset_peer"] is resolved_peer
     assert client.calls[resume_start]["offset_rate"] == 1
+
+
+def test_search_global_uses_message_date_when_next_rate_missing(monkeypatch):
+    first_date = datetime(2026, 4, 20, 12, 30, tzinfo=UTC)
+    search_messages = [
+        SimpleNamespace(
+            id=20,
+            date=first_date,
+            input_chat=messages.types.InputPeerChannel(123, 456),
+            peer_id=messages.types.PeerChannel(123),
+        ),
+        SimpleNamespace(
+            id=19,
+            date=datetime(2026, 4, 19, tzinfo=UTC),
+            input_chat=messages.types.InputPeerChannel(456, 789),
+            peer_id=messages.types.PeerChannel(456),
+        ),
+    ]
+    client = _SearchClient(search_messages, include_next_rate=False)
+    monkeypatch.setattr(messages, "get_client", _async_value(client))
+    monkeypatch.setattr(messages, "iter_message_dicts", lambda items: [{"id": item.id} for item in items])
+
+    result = asyncio.run(_tool_from("search_messages_global")(query="launch", limit=1))
+
+    assert result["next_offset"]["offset_rate"] == int(first_date.timestamp())
+    assert client.calls[1]["offset_rate"] == int(first_date.timestamp())
 
 
 def test_search_in_chat_resumes_cleanly_when_offset_id_passed_back(monkeypatch):
