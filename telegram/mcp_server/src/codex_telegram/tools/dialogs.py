@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 from telethon import functions, types
 
-from ..client import get_client, with_flood_wait
+from ..client import get_client, invalidate_dialog_cache, list_all_dialogs, with_flood_wait
 from ..helpers import (
     dialog_to_dict,
     iter_message_dicts,
@@ -49,7 +49,7 @@ def register(mcp) -> None:
         """Return one dialog plus recent history."""
         client = await get_client()
         entity = await resolve_entity_fuzzy(client, chat_ref)
-        dialogs = await client.get_dialogs(limit=200)
+        dialogs = await list_all_dialogs(client)
         dialog = next((item for item in dialogs if peer_ref(item.entity) == peer_ref(entity)), None)
 
         history = await client.get_messages(entity, limit=history_limit)
@@ -131,4 +131,5 @@ def register(mcp) -> None:
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
         await client.send_read_acknowledge(entity)
+        invalidate_dialog_cache(client)
         return {"chat_ref": peer_ref(entity), "marked_read": True}

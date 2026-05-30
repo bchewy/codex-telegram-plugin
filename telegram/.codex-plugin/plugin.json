@@ -1,21 +1,28 @@
 {
   "name": "telegram",
   "version": "0.1.0",
-  "description": "Read, summarize, send, and manage Telegram chats from Codex.",
+  "description": "Read, cache, search, summarize, send, and manage Telegram chats from Codex.",
+  "author": {
+    "name": "Brian Chew"
+  },
+  "homepage": "https://github.com/bchewy/codex-telegram-plugin",
+  "repository": "https://github.com/bchewy/codex-telegram-plugin",
+  "license": "MIT",
+  "keywords": ["telegram", "mcp", "messaging"],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Telegram",
     "shortDescription": "Personal Telegram account in Codex",
-    "longDescription": "Connect your personal Telegram account and let Codex summarize, search, send, and manage chats.",
+    "longDescription": "Connect your personal Telegram account and let Codex summarize, search, send, and manage chats. Sync chats into a local cache for efficient repeat search, long-window summaries, and aggregates.",
     "developerName": "Brian Chew",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],
     "websiteURL": "https://github.com/bchewy/codex-telegram-plugin",
     "defaultPrompt": [
       "Summarize my unread Telegram messages from today",
-      "Find Telegram messages from Alice about the launch",
-      "Draft a Telegram reply to the design thread"
+      "Sync/cache a Telegram chat, then search it for launch decisions",
+      "Aggregate cached Telegram history by sender this month"
     ],
     "brandColor": "#229ED9",
     "composerIcon": "./assets/icon.svg",

@@ -10,6 +10,8 @@ from telethon.tl.custom.dialog import Dialog
 from telethon.tl.custom.draft import Draft
 from telethon.tl.custom.message import Message
 
+from .client import list_all_dialogs
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -172,9 +174,20 @@ def _reaction_summary(message: Message) -> list[dict[str, Any]]:
     return results
 
 
+def _safe_peer_ref(peer: Any) -> str | None:
+    if peer is None:
+        return None
+    try:
+        return peer_ref(peer)
+    except TypeError:
+        return None
+
+
 def message_to_dict(message: Message) -> dict[str, Any]:
     sender = message.sender
     sender_name = tg_utils.get_display_name(sender) if sender else None
+    reply_to = getattr(message, "reply_to", None)
+    replies = getattr(message, "replies", None)
 
     return {
         "id": message.id,
@@ -188,7 +201,15 @@ def message_to_dict(message: Message) -> dict[str, Any]:
         "out": message.out,
         "mentioned": message.mentioned,
         "silent": message.silent,
-        "reply_to_message_id": getattr(message.reply_to, "reply_to_msg_id", None),
+        "reply_to_message_id": getattr(reply_to, "reply_to_msg_id", None),
+        "reply_to_top_id": getattr(reply_to, "reply_to_top_id", None),
+        "reply_to_peer_ref": _safe_peer_ref(getattr(reply_to, "reply_to_peer_id", None)),
+        "is_forum_topic": bool(getattr(reply_to, "forum_topic", False)),
+        "reply_quote_text": getattr(reply_to, "quote_text", None),
+        "reply_quote_offset": getattr(reply_to, "quote_offset", None),
+        "reply_count": getattr(replies, "replies", None),
+        "comments": getattr(replies, "comments", None),
+        "max_reply_id": getattr(replies, "max_id", None),
         "views": getattr(message, "views", None),
         "forwards": getattr(message, "forwards", None),
         "grouped_id": message.grouped_id,
@@ -281,7 +302,7 @@ async def resolve_entity(client: TelegramClient, ref: str | int | Any) -> Any:
     except ValueError as exc:
         if _looks_like_numeric_ref(ref):
             try:
-                await client.get_dialogs(limit=200)
+                await list_all_dialogs(client)
                 return await _resolve_entity_direct(client, ref)
             except (errors.UsernameInvalidError, errors.UsernameNotOccupiedError, ValueError):
                 pass
@@ -297,7 +318,7 @@ async def resolve_entity_fuzzy(client: TelegramClient, ref: str | int | Any) -> 
             raise
 
         candidate = ref.strip()
-        dialogs = await client.get_dialogs(limit=200)
+        dialogs = await list_all_dialogs(client)
         lowered = candidate.casefold()
         exact = next(
             (dialog.entity for dialog in dialogs if (dialog.title or "").casefold() == lowered),

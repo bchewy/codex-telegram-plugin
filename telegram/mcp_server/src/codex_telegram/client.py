@@ -22,12 +22,62 @@ _last_client_verify_monotonic = 0.0
 
 CONNECTION_VERIFY_INTERVAL_SECONDS = 30.0
 CONNECTION_VERIFY_TIMEOUT_SECONDS = 5.0
+DIALOG_CACHE_TTL_SECONDS = 60.0
+DIALOG_CACHE_ATTR = "_codex_telegram_dialog_cache"
 DEFAULT_TAKEOUT_KWARGS = {
     "users": True,
     "chats": True,
     "megagroups": True,
     "channels": True,
 }
+
+
+class TelegramFloodWaitError(RuntimeError):
+    """RuntimeError that preserves Telegram FloodWait metadata.
+
+    Subclasses RuntimeError so existing in-process callers can keep working,
+    while carrying `seconds`, `tool_name`, and `attempts` as both attributes
+    (for `except TelegramFloodWaitError as exc:` consumers) and a parseable
+    suffix in the error message — FastMCP stringifies tool exceptions before
+    sending them to the client, so structured attrs alone are not visible
+    to MCP callers.
+    """
+
+    def __init__(self, *, seconds: int, tool_name: str | None = None, attempts: int = 1):
+        self.seconds = seconds
+        self.tool_name = tool_name
+        self.attempts = attempts
+        target = tool_name or "this request"
+        super().__init__(
+            f"Telegram rate limited {target} for {seconds} seconds. "
+            "Wait for the flood window to expire and retry. "
+            f"[flood_wait_seconds={seconds} tool_name={tool_name or 'unknown'} "
+            f"attempts={attempts}]"
+        )
+
+
+async def list_all_dialogs(client) -> list:
+    """Return every dialog for the authenticated account.
+
+    Cached on the client instance for `DIALOG_CACHE_TTL_SECONDS` so repeated
+    entity resolution and unread scans don't refetch the full list on every
+    call. Replaces the previous `get_dialogs(limit=200)` pattern that
+    silently truncated power-user accounts.
+    """
+    cached = getattr(client, DIALOG_CACHE_ATTR, None)
+    if cached is not None:
+        fetched_at, dialogs = cached
+        if time.monotonic() - fetched_at < DIALOG_CACHE_TTL_SECONDS:
+            return dialogs
+
+    dialogs = [dialog async for dialog in client.iter_dialogs()]
+    setattr(client, DIALOG_CACHE_ATTR, (time.monotonic(), dialogs))
+    return dialogs
+
+
+def invalidate_dialog_cache(client) -> None:
+    if hasattr(client, DIALOG_CACHE_ATTR):
+        delattr(client, DIALOG_CACHE_ATTR)
 
 
 def _build_client(session_string: str, api_id: int, api_hash: str) -> TelegramClient:
@@ -157,9 +207,10 @@ def with_flood_wait(
             except errors.FloodWaitError as exc:
                 attempts += 1
                 if attempts > 1 or exc.seconds > max_sleep_seconds:
-                    raise RuntimeError(
-                        f"Telegram rate limited this request for {exc.seconds} seconds. "
-                        "Wait for the flood window to expire and retry."
+                    raise TelegramFloodWaitError(
+                        seconds=exc.seconds,
+                        tool_name=func.__name__,
+                        attempts=attempts,
                     ) from exc
                 await asyncio.sleep(exc.seconds)
 

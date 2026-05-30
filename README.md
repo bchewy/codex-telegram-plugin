@@ -5,8 +5,8 @@ Use your personal Telegram account inside Codex.
 This plugin lets Codex:
 
 - summarize chats
-- search message history
-- cache large chat histories locally for fast repeat search and aggregation
+- search recent messages live, or search cached chat history for repeat/broad/old lookups
+- sync recent chat history into a local cache once, then summarize, search, and aggregate locally to reduce repeated Telegram API calls (see the cache section below — first sync covers the newest N messages; older backfill is not yet exposed)
 - draft and send replies
 - triage unread threads
 - manage groups/channels
@@ -26,6 +26,65 @@ If you just want the shortest path, do this:
 
 The exact commands are below.
 
+## Codex marketplace model
+
+A Codex marketplace is a catalog of plugins. Its `interface.displayName` is the
+dropdown label in Codex, while this plugin's `interface.displayName` is the
+installable item shown inside that marketplace.
+
+For a single local selector, keep all local plugin entries in one user-level
+marketplace at `~/.agents/plugins/marketplace.json`. Do not keep a repo-local
+`.agents/plugins/marketplace.json` active for this checkout unless you
+intentionally want Codex to show this repository as a separate marketplace.
+
+This repo's plugin bundle is `telegram/`. In the shared `Local Plugins`
+marketplace, the plugin should be installed as:
+
+```bash
+codex plugin add telegram@local
+```
+
+The matching WhatsApp plugin uses the same model: one `Local Plugins`
+marketplace, separate `telegram` and `whatsapp` plugin entries.
+
+For checkouts under `~/dev`, the relevant `plugins` entries look like this.
+Preserve any other plugins already present in your local marketplace file.
+
+```json
+{
+  "name": "local",
+  "interface": {
+    "displayName": "Local Plugins"
+  },
+  "plugins": [
+    {
+      "name": "telegram",
+      "source": {
+        "source": "local",
+        "path": "./dev/codex-telegram-plugin/telegram"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "whatsapp",
+      "source": {
+        "source": "local",
+        "path": "./dev/codex-whatsapp-plugin/whatsapp"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
+```
+
 ## Requirements
 
 - Codex CLI / Codex app
@@ -36,26 +95,23 @@ The exact commands are below.
 
 ## Step 1: Install the plugin in Codex
 
-### Option A: install from this repo checkout
+This repo is designed to be installed from the shared local marketplace instead
+of registering itself as a separate marketplace.
 
-If you cloned this repo locally:
-
-```bash
-cd /path/to/codex-telegram-plugin
-codex marketplace add "$(pwd)"
-```
-
-Then open a fresh Codex session, run `/plugins`, and install `Telegram`.
-
-### Option B: install from GitHub
-
-If you have access to the repo directly from GitHub:
+If your `~/.agents/plugins/marketplace.json` already includes this checkout,
+install the plugin with:
 
 ```bash
-codex marketplace add bchewy/codex-telegram-plugin
+codex plugin add telegram@local
 ```
 
-Then open a fresh Codex session, run `/plugins`, and install `Telegram`.
+If the local marketplace does not include it yet, add a `telegram` entry that
+points at this repo's `telegram/` directory, then rerun the command above. Keep
+the marketplace name as `local` and the display name as `Local Plugins` if you
+want it grouped with your other local plugins.
+
+Open a fresh Codex session after installing. Old threads can miss newly
+installed plugin, skill, and MCP context.
 
 ## Step 2: Verify the plugin is installed
 
@@ -72,6 +128,7 @@ You should see:
 - `Telegram Summarize`
 - `Telegram Triage Unread`
 - `Telegram Search`
+- `Telegram Aggregate`
 - `Telegram Send`
 - `Telegram Manage Groups`
 - `Telegram Media Inspect`
@@ -164,6 +221,10 @@ Start a fresh Codex thread and try one of these:
 ```
 
 ```text
+@Telegram cache the Design chat, then search it for launch blockers from last month
+```
+
+```text
 @Telegram draft a Telegram reply to the design thread
 ```
 
@@ -179,6 +240,10 @@ $telegram:telegram-summarize summarize my unread Telegram messages from today
 
 ```text
 $telegram:telegram-search find messages from Alice about launch
+```
+
+```text
+$telegram:telegram-aggregate show cached weekly message volume for the Design chat this quarter
 ```
 
 ```text
@@ -271,14 +336,18 @@ Do not pass the master key as a CLI flag. It ends up in shell history and `ps`.
 | `CODEX_TELEGRAM_UPLOAD_DIR`        | Upload sandbox for `send_*` and `set_profile_photo`. Files outside this directory require `allow_arbitrary_path=True`.                        |
 
 
-## Local cache
+## Local cache: use it for broad, old, repeated, or aggregate work
 
-Large-history workflows can now use a local SQLite cache at `~/.cache/codex-telegram/cache.db`.
+The local SQLite cache lives at `~/.cache/codex-telegram/cache.db` and is per chat.
+Use live search for quick recent lookups or when you do not know the dialog yet. Use the cache when the dialog is known and the task is broad, old, repeated, exhaustive, a summary, or an aggregate.
 
-- `sync_chat_cache` mirrors one chat into the cache
-- `search_cache` runs FTS5 keyword search against cached messages
-- `aggregate_cache` returns counts by day, week, or sender
-- `summarize_chat_history` returns chunked cache-backed batches for map-reduce summaries
+- `cache_status` shows which chats are cached, message counts, and last sync times.
+- `sync_chat_cache(chat_ref)` incrementally adds new messages for one chat. Use `full=True` only when you intentionally want to rebuild that chat’s cache. The first sync of a chat bootstraps by iterating messages with `iter_messages(limit=max_messages_per_batch)` (default 5000) — for chats larger than that batch, the response sets `older_history_uncached: true` and exposes `oldest_fetched_id` so callers can detect the cap; older history is not currently backfilled by this tool.
+- `search_cache(chat_ref, query, from_user, min_date, max_date, auto_sync_seconds=600, compact=True)` searches locally and can auto-sync the chat first if the cache is missing or stale. Use `compact=True` for token-efficient previews; use `next_offset` to continue paginated results.
+- `summarize_chat_history(chat_ref, min_date, max_date, chunk_index=0)` returns SQL-paginated cache-backed chunks for map-reduce summaries.
+- `aggregate_cache(chat_ref, min_date, max_date, group_by="day|week|sender")` returns local counts without re-querying Telegram.
+
+For unknown-dialog searches, first use live search or `list_dialogs` to identify candidate chats, then sync/search those chats through the cache.
 
 If you want the cache encrypted at rest, install `pysqlcipher3`, set `CODEX_TELEGRAM_CACHE_ENCRYPT=1`, and provide `CODEX_TELEGRAM_MASTER_KEY`.
 
@@ -338,4 +407,4 @@ If you would not paste the content into a Codex prompt directly, do not summariz
   - `assets/`: icon, logo, screenshots referenced by the manifest
   - `.codex-plugin/plugin.json`: plugin manifest
   - `.mcp.json`: bundled MCP server declaration
-- `.agents/plugins/marketplace.json`: local marketplace definition (points at `./telegram`)
+- Local marketplace registration lives outside this repo in `~/.agents/plugins/marketplace.json`
