@@ -2,6 +2,13 @@
   "name": "telegram",
   "version": "0.1.0",
   "description": "Read, cache, search, summarize, send, and manage Telegram chats from Codex.",
+  "author": {
+    "name": "Brian Chew"
+  },
+  "homepage": "https://github.com/bchewy/codex-telegram-plugin",
+  "repository": "https://github.com/bchewy/codex-telegram-plugin",
+  "license": "MIT",
+  "keywords": ["telegram", "mcp", "messaging"],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {

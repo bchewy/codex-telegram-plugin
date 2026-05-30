@@ -26,6 +26,65 @@ If you just want the shortest path, do this:
 
 The exact commands are below.
 
+## Codex marketplace model
+
+A Codex marketplace is a catalog of plugins. Its `interface.displayName` is the
+dropdown label in Codex, while this plugin's `interface.displayName` is the
+installable item shown inside that marketplace.
+
+For a single local selector, keep all local plugin entries in one user-level
+marketplace at `~/.agents/plugins/marketplace.json`. Do not keep a repo-local
+`.agents/plugins/marketplace.json` active for this checkout unless you
+intentionally want Codex to show this repository as a separate marketplace.
+
+This repo's plugin bundle is `telegram/`. In the shared `Local Plugins`
+marketplace, the plugin should be installed as:
+
+```bash
+codex plugin add telegram@local
+```
+
+The matching WhatsApp plugin uses the same model: one `Local Plugins`
+marketplace, separate `telegram` and `whatsapp` plugin entries.
+
+For checkouts under `~/dev`, the relevant `plugins` entries look like this.
+Preserve any other plugins already present in your local marketplace file.
+
+```json
+{
+  "name": "local",
+  "interface": {
+    "displayName": "Local Plugins"
+  },
+  "plugins": [
+    {
+      "name": "telegram",
+      "source": {
+        "source": "local",
+        "path": "./dev/codex-telegram-plugin/telegram"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "whatsapp",
+      "source": {
+        "source": "local",
+        "path": "./dev/codex-whatsapp-plugin/whatsapp"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
+```
+
 ## Requirements
 
 - Codex CLI / Codex app
@@ -36,26 +95,23 @@ The exact commands are below.
 
 ## Step 1: Install the plugin in Codex
 
-### Option A: install from this repo checkout
+This repo is designed to be installed from the shared local marketplace instead
+of registering itself as a separate marketplace.
 
-If you cloned this repo locally:
-
-```bash
-cd /path/to/codex-telegram-plugin
-codex marketplace add "$(pwd)"
-```
-
-Then open a fresh Codex session, run `/plugins`, and install `Telegram`.
-
-### Option B: install from GitHub
-
-If you have access to the repo directly from GitHub:
+If your `~/.agents/plugins/marketplace.json` already includes this checkout,
+install the plugin with:
 
 ```bash
-codex marketplace add bchewy/codex-telegram-plugin
+codex plugin add telegram@local
 ```
 
-Then open a fresh Codex session, run `/plugins`, and install `Telegram`.
+If the local marketplace does not include it yet, add a `telegram` entry that
+points at this repo's `telegram/` directory, then rerun the command above. Keep
+the marketplace name as `local` and the display name as `Local Plugins` if you
+want it grouped with your other local plugins.
+
+Open a fresh Codex session after installing. Old threads can miss newly
+installed plugin, skill, and MCP context.
 
 ## Step 2: Verify the plugin is installed
 
@@ -351,4 +407,4 @@ If you would not paste the content into a Codex prompt directly, do not summariz
   - `assets/`: icon, logo, screenshots referenced by the manifest
   - `.codex-plugin/plugin.json`: plugin manifest
   - `.mcp.json`: bundled MCP server declaration
-- `.agents/plugins/marketplace.json`: local marketplace definition (points at `./telegram`)
+- Local marketplace registration lives outside this repo in `~/.agents/plugins/marketplace.json`
