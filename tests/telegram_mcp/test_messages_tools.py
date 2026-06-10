@@ -147,7 +147,15 @@ class _ContextClient:
     def __init__(self, history):
         self.history = history
 
-    async def get_messages(self, _entity, limit: int | None = None, max_id: int | None = None, min_id: int | None = None, reverse: bool = False, ids: int | None = None):
+    async def get_messages(
+        self,
+        _entity,
+        limit: int | None = None,
+        max_id: int | None = None,
+        min_id: int | None = None,
+        reverse: bool = False,
+        ids: int | None = None,
+    ):
         if ids is not None:
             return next((item for item in self.history if item.id == ids), None)
         if max_id is not None:
@@ -169,7 +177,13 @@ class _FakeFloodWaitError(Exception):
 
 
 class _BulkClient:
-    def __init__(self, highest_id: int, *, empty_ids: set[int] | None = None, flood_chunk: tuple[int, ...] | None = None):
+    def __init__(
+        self,
+        highest_id: int,
+        *,
+        empty_ids: set[int] | None = None,
+        flood_chunk: tuple[int, ...] | None = None,
+    ):
         self.highest_id = highest_id
         self.empty_ids = empty_ids or set()
         self.flood_chunk = flood_chunk

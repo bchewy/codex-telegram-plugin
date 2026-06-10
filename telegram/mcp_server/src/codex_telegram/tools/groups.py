@@ -3,7 +3,16 @@ from __future__ import annotations
 from telethon import errors, functions, types, utils as tg_utils
 
 from ..client import get_client, with_flood_wait
-from ..helpers import entity_kind, get_chat_id, peer_ref, resolve_entity, resolve_input_channel, resolve_input_user, to_iso, user_to_dict
+from ..helpers import (
+    entity_kind,
+    get_chat_id,
+    peer_ref,
+    resolve_entity,
+    resolve_input_channel,
+    resolve_input_user,
+    to_iso,
+    user_to_dict,
+)
 from ..safety import require_destructive
 
 

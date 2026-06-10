@@ -5,7 +5,15 @@ import random
 from telethon import functions, types
 
 from ..client import get_client, with_flood_wait
-from ..helpers import coerce_message_ids, draft_to_dict, message_to_dict, parse_datetime, peer_ref, resolve_entity, resolve_input_peer
+from ..helpers import (
+    coerce_message_ids,
+    draft_to_dict,
+    message_to_dict,
+    parse_datetime,
+    peer_ref,
+    resolve_entity,
+    resolve_input_peer,
+)
 from ..safety import require_destructive
 
 

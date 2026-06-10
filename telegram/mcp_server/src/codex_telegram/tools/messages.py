@@ -637,7 +637,11 @@ def register(mcp) -> None:
                 offset_id = next_offset
                 offset_date = None
 
-        return {"chat_ref": peer_ref(entity), "count": len(filtered[:limit]), "messages": iter_message_dicts(filtered[:limit])}
+        return {
+            "chat_ref": peer_ref(entity),
+            "count": len(filtered[:limit]),
+            "messages": iter_message_dicts(filtered[:limit]),
+        }
 
     @mcp.tool()
     @with_flood_wait

@@ -95,7 +95,9 @@ def test_inspect_message_media_downloads_and_runs_script(monkeypatch):
         captured["kwargs"] = kwargs
         return _FakeProcess(
             stdout=(
-                b'{"transcript_path":"/tmp/video.txt","contact_sheet_path":"/tmp/contact.jpg","frames_dir":"/tmp/frames"}\n'
+                b'{"transcript_path":"/tmp/video.txt",'
+                b'"contact_sheet_path":"/tmp/contact.jpg",'
+                b'"frames_dir":"/tmp/frames"}\n'
             )
         )
 

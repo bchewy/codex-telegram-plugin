@@ -1,6 +1,6 @@
 ---
 name: telegram-summarize
-description: Summarize one or more Telegram chats over a time window. Prefer cache-backed chunk summaries for known chats with broad, old, repeated, or exhaustive windows; use live history only for small recent catch-ups.
+description: Use when Telegram summaries, unread catch-ups, or recaps are requested.
 ---
 
 1. If the chat is unspecified, call `list_dialogs` and have the user pick the relevant dialog(s).

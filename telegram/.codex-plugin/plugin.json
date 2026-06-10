@@ -1,7 +1,7 @@
 {
   "name": "telegram",
   "version": "0.1.0",
-  "description": "Read, cache, search, summarize, send, and manage Telegram chats from Codex.",
+  "description": "Telegram messaging tools for Codex.",
   "author": {
     "name": "Brian Chew"
   },
@@ -19,10 +19,12 @@
     "category": "Productivity",
     "capabilities": ["Read", "Write"],
     "websiteURL": "https://github.com/bchewy/codex-telegram-plugin",
+    "privacyPolicyURL": "https://github.com/bchewy/codex-telegram-plugin/blob/main/telegram/docs/privacy.md",
+    "termsOfServiceURL": "https://github.com/bchewy/codex-telegram-plugin/blob/main/telegram/docs/terms.md",
     "defaultPrompt": [
-      "Summarize my unread Telegram messages from today",
-      "Sync/cache a Telegram chat, then search it for launch decisions",
-      "Aggregate cached Telegram history by sender this month"
+      "Summarize unread Telegram",
+      "Search cached Telegram",
+      "Send a Telegram reply"
     ],
     "brandColor": "#229ED9",
     "composerIcon": "./assets/icon.svg",

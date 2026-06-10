@@ -266,6 +266,9 @@ uv run --project ./telegram/mcp_server codex-telegram logout
 
 # run tests
 uv run --project ./telegram/mcp_server pytest
+
+# run tests with coverage; this writes telegram/coverage/coverage.xml for Plugin Eval
+uv run --project ./telegram/mcp_server pytest
 ```
 
 ### Installed-bundle flow
@@ -352,6 +355,10 @@ For unknown-dialog searches, first use live search or `list_dialogs` to identify
 If you want the cache encrypted at rest, install `pysqlcipher3`, set `CODEX_TELEGRAM_CACHE_ENCRYPT=1`, and provide `CODEX_TELEGRAM_MASTER_KEY`.
 
 ## Troubleshooting
+
+### Check runtime, auth, and cache diagnostics
+
+Use the `telegram_diagnostics` MCP tool when the plugin may be running from a stale installed bundle, when auth is unclear, or when you want to verify whether the local message cache is encrypted. It returns the package version, plugin root, session-storage state, cache path, cache size, and cache encryption status without requiring a working Telegram login. Pass `include_account=True` if you also want it to attempt an authenticated account check.
 
 ### I installed the plugin but `@Telegram` does not show up
 

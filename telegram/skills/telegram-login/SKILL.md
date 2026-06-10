@@ -1,6 +1,6 @@
 ---
 name: telegram-login
-description: Use when the user wants to connect, reconnect, inspect, or reset their personal Telegram account for this plugin. Do not use for message retrieval or sending unless auth/setup is the blocker.
+description: Use when Telegram auth setup, reset, or diagnostics are requested.
 ---
 
 1. Explain that Telegram user auth for this plugin happens outside the MCP server because Codex spawns MCP servers headlessly over stdio.

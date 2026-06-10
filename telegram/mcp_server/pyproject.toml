@@ -21,7 +21,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3.0",
-  "pytest-asyncio>=0.24.0"
+  "pytest-asyncio>=0.24.0",
+  "pytest-cov>=5.0.0"
 ]
 
 [project.scripts]
@@ -31,6 +32,10 @@ codex-telegram = "codex_telegram.__main__:main"
 packages = ["src/codex_telegram"]
 
 [tool.pytest.ini_options]
-addopts = "-q"
+addopts = "-q --cov=codex_telegram --cov-report=term-missing --cov-report=xml:../coverage/coverage.xml"
 asyncio_mode = "auto"
 pythonpath = ["src"]
+testpaths = [
+  "tests",
+  "../../tests/telegram_mcp"
+]
