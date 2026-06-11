@@ -12,7 +12,6 @@ from ..helpers import (
     parse_datetime,
     peer_ref,
     resolve_entity,
-    resolve_input_peer,
 )
 from ..safety import require_destructive
 
@@ -48,7 +47,8 @@ def register(mcp) -> None:
             raise ValueError("A poll needs at least two options.")
 
         client = await get_client()
-        input_peer = await resolve_input_peer(client, chat_ref)
+        entity = await resolve_entity(client, chat_ref)
+        input_peer = await client.get_input_entity(entity)
         poll_answers = [
             types.PollAnswer(text=_text_with_entities(option), option=str(index).encode("utf-8"))
             for index, option in enumerate(options)
@@ -74,7 +74,7 @@ def register(mcp) -> None:
         sent_messages = [update.message for update in getattr(result, "updates", []) if hasattr(update, "message")]
         message_obj = sent_messages[-1] if sent_messages else None
         return {
-            "chat_ref": peer_ref(input_peer),
+            "chat_ref": peer_ref(entity),
             "question": question,
             "options": options,
             "message": message_to_dict(message_obj) if message_obj else None,

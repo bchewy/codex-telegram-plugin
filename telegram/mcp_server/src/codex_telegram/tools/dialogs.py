@@ -12,7 +12,6 @@ from ..helpers import (
     peer_ref,
     resolve_entity,
     resolve_entity_fuzzy,
-    resolve_input_peer,
 )
 
 
@@ -97,7 +96,8 @@ def register(mcp) -> None:
     ) -> dict:
         """Mute notifications for a dialog."""
         client = await get_client()
-        input_peer = await resolve_input_peer(client, chat_ref)
+        entity = await resolve_entity(client, chat_ref)
+        input_peer = await client.get_input_entity(entity)
         until = parse_datetime(mute_until) or datetime(2100, 1, 1, tzinfo=UTC)
         await client(
             functions.account.UpdateNotifySettingsRequest(
@@ -110,27 +110,29 @@ def register(mcp) -> None:
                 ),
             )
         )
-        return {"chat_ref": peer_ref(input_peer), "muted_until": until.isoformat(), "silent": silent}
+        return {"chat_ref": peer_ref(entity), "muted_until": until.isoformat(), "silent": silent}
 
     @mcp.tool()
     @with_flood_wait
     async def pin_dialog(chat_ref: str) -> dict:
         """Pin a dialog in the Telegram chat list."""
         client = await get_client()
-        input_peer = await resolve_input_peer(client, chat_ref)
+        entity = await resolve_entity(client, chat_ref)
+        input_peer = await client.get_input_entity(entity)
         await client(functions.messages.ToggleDialogPinRequest(peer=input_peer, pinned=True))
         invalidate_dialog_cache(client)
-        return {"chat_ref": peer_ref(input_peer), "pinned": True}
+        return {"chat_ref": peer_ref(entity), "pinned": True}
 
     @mcp.tool()
     @with_flood_wait
     async def unpin_dialog(chat_ref: str) -> dict:
         """Unpin a dialog in the Telegram chat list."""
         client = await get_client()
-        input_peer = await resolve_input_peer(client, chat_ref)
+        entity = await resolve_entity(client, chat_ref)
+        input_peer = await client.get_input_entity(entity)
         await client(functions.messages.ToggleDialogPinRequest(peer=input_peer, pinned=False))
         invalidate_dialog_cache(client)
-        return {"chat_ref": peer_ref(input_peer), "pinned": False}
+        return {"chat_ref": peer_ref(entity), "pinned": False}
 
     @mcp.tool()
     @with_flood_wait

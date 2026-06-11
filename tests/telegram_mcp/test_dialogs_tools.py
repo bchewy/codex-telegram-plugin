@@ -98,29 +98,33 @@ class _PinClient:
 def test_pin_dialog_returns_canonical_ref_and_invalidates_cache(monkeypatch):
     client = _PinClient()
     invalidated = []
-    input_peer = types.InputPeerChannel(channel_id=42, access_hash=0)
+    entity = types.PeerChannel(channel_id=42)
+    client.get_input_entity = _async_value(types.InputPeerChannel(channel_id=42, access_hash=0))
 
     monkeypatch.setattr(dialogs, "get_client", _async_value(client))
-    monkeypatch.setattr(dialogs, "resolve_input_peer", _async_value(input_peer))
+    monkeypatch.setattr(dialogs, "resolve_entity", _async_value(entity))
     monkeypatch.setattr(
         dialogs, "invalidate_dialog_cache", lambda _client: invalidated.append(True)
     )
 
     result = asyncio.run(_tool_from("pin_dialog")(chat_ref="My Channel"))
 
-    # The fuzzy caller string is normalized to the canonical peer ref.
+    # The raw caller string is normalized to the canonical peer ref.
     assert result == {"chat_ref": "channel:42", "pinned": True}
     assert invalidated == [True]
 
 
-def test_mute_dialog_returns_canonical_ref(monkeypatch):
+def test_mute_dialog_resolves_self_chat_without_crashing(monkeypatch):
+    # get_input_entity returns InputPeerSelf for "me"; the canonical ref must
+    # come from the resolved entity, which peer_ref understands.
     client = _PinClient()
-    input_peer = types.InputPeerUser(user_id=9, access_hash=0)
+    entity = types.PeerUser(user_id=9)
+    client.get_input_entity = _async_value(types.InputPeerSelf())
 
     monkeypatch.setattr(dialogs, "get_client", _async_value(client))
-    monkeypatch.setattr(dialogs, "resolve_input_peer", _async_value(input_peer))
+    monkeypatch.setattr(dialogs, "resolve_entity", _async_value(entity))
 
-    result = asyncio.run(_tool_from("mute_dialog")(chat_ref="@someone"))
+    result = asyncio.run(_tool_from("mute_dialog")(chat_ref="me"))
 
     assert result["chat_ref"] == "user:9"
     assert result["silent"] is True
