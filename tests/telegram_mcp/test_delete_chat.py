@@ -128,3 +128,23 @@ def test_delete_chat_propagates_unhandled_transport_errors(monkeypatch):
 
     with pytest.raises(RuntimeError, match="transport"):
         asyncio.run(_delete_chat_tool()(chat_ref="chat:1", confirm=True))
+
+
+def test_delete_chat_rejects_non_group_refs_instead_of_falling_back(monkeypatch):
+    # A wrong-kind ref (e.g. a user/DM) must error up front. Letting it reach
+    # the except-ValueError fallback would silently delete the dialog.
+    monkeypatch.setenv("CODEX_TELEGRAM_ALLOW_DESTRUCTIVE", "1")
+    client = _DeleteClient()
+    deleted_dialogs = []
+
+    async def tracking_delete_dialog(entity):
+        deleted_dialogs.append(entity)
+
+    client.delete_dialog = tracking_delete_dialog
+    monkeypatch.setattr(groups, "get_client", _async_value(client))
+    monkeypatch.setattr(groups, "resolve_entity", _async_value(object()))
+
+    with pytest.raises(ValueError, match="not a group or channel"):
+        asyncio.run(_delete_chat_tool()(chat_ref="user:42", confirm=True))
+
+    assert deleted_dialogs == []

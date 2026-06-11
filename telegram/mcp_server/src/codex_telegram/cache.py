@@ -72,8 +72,12 @@ def cache_db_path() -> Path:
     cache_dir = base_dir / "codex-telegram"
     cache_dir.mkdir(parents=True, exist_ok=True)
     # The cache holds private message content; keep it owner-only even when
-    # encryption is not enabled.
-    os.chmod(cache_dir, 0o700)
+    # encryption is not enabled. Best-effort: failure to tighten permissions
+    # must not break cache access itself.
+    try:
+        os.chmod(cache_dir, 0o700)
+    except OSError:
+        pass
     return cache_dir / CACHE_FILE_NAME
 
 

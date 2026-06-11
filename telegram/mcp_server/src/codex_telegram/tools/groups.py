@@ -245,6 +245,13 @@ def register(mcp) -> None:
         require_destructive("delete_chat", confirm)
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
+        if not isinstance(entity, (types.Chat, types.Channel)):
+            # Wrong-kind refs must error rather than reach the except-ValueError
+            # fallback below, which would silently delete the dialog instead.
+            raise ValueError(
+                f"{chat_ref} is not a group or channel; delete_chat only "
+                "deletes groups/channels."
+            )
         deleted = False
         fell_back_to_leave = False
         fallback_succeeded = False

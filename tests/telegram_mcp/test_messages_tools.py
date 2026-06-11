@@ -1258,3 +1258,34 @@ def test_end_takeout_session_finalizes_active_session(monkeypatch):
 
     assert calls == [True]
     assert result == {"ok": True, "ended": True, "success": True}
+
+
+def test_global_search_mid_page_cursor_uses_message_date_not_next_rate(monkeypatch):
+    # `next_rate` describes the position after the END of a page. When the
+    # caller's resume cursor lands mid-page, the offset_rate must come from
+    # that message's own date or resuming would skip the rest of the page.
+    base = datetime(2026, 4, 10, 12, 0, 0, tzinfo=UTC)
+    page = [
+        SimpleNamespace(
+            id=item_id,
+            date=base.replace(minute=item_id),
+            peer_id=None,
+        )
+        for item_id in (50, 40, 30, 20, 10)
+    ]
+
+    class _OnePageClient:
+        async def __call__(self, _request):
+            return SimpleNamespace(messages=page, users=[], chats=[], next_rate=999_999)
+
+    monkeypatch.setattr(messages, "get_client", _async_value(_OnePageClient()))
+    monkeypatch.setattr(messages, "iter_message_dicts", lambda items: [{"id": item.id} for item in items])
+
+    result = asyncio.run(
+        _tool_from("search_messages_global")(query="launch", limit=2, scan_limit=100)
+    )
+
+    assert result["has_more"] is True
+    boundary = page[1]  # last RETURNED message (limit=2)
+    assert result["next_offset"]["offset_rate"] == int(boundary.date.timestamp())
+    assert result["next_offset"]["offset_rate"] != 999_999

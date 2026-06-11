@@ -434,17 +434,20 @@ def test_search_cache_auto_sync_is_bounded_to_one_batch(monkeypatch, tmp_path: P
 
     async def fake_fetch_bulk_history_payload(**kwargs):
         sync_kwargs.append(kwargs)
+        batch_no = len(sync_kwargs)
+        message_id = batch_no
         return {
             "chat_ref": "chat:1",
             "count": 1,
             "deleted_count": 0,
-            "from_id": 1,
-            "to_id": 1,
-            "messages": [_payload(1, day=18, text="hello world")],
-            # Pretend there is much more history; a bounded auto-sync must
-            # stop after one batch anyway.
-            "truncated": True,
-            "next_since_message_id": 1,
+            "from_id": message_id,
+            "to_id": message_id,
+            "messages": [_payload(message_id, day=18, text="hello world")],
+            # Pretend more history remains, with an advancing cursor: an
+            # unbounded auto-sync would keep fetching (up to the 5th batch)
+            # instead of stopping after one.
+            "truncated": batch_no < 5,
+            "next_since_message_id": message_id if batch_no < 5 else None,
             "used_takeout": False,
         }
 
@@ -461,3 +464,17 @@ def test_search_cache_auto_sync_is_bounded_to_one_batch(monkeypatch, tmp_path: P
     assert result["auto_synced"] is True
     assert result["auto_sync_truncated"] is True
     assert result["count"] == 1
+
+
+def test_cache_dir_and_db_file_are_owner_only(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+
+    db_path = cache.cache_db_path()
+    connection = cache.connect_cache(db_path)
+    try:
+        cache.ensure_cache_schema(connection)
+    finally:
+        connection.close()
+
+    assert (db_path.parent.stat().st_mode & 0o777) == 0o700
+    assert (db_path.stat().st_mode & 0o777) == 0o600

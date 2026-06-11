@@ -243,3 +243,20 @@ def test_get_history_client_initializes_takeout_when_none_active(monkeypatch):
 
     assert fake.takeout_calls[0]["finalize"] is False
     assert fake.takeout_calls[0]["users"] is True
+
+
+def test_get_client_fast_path_survives_concurrent_discard(monkeypatch):
+    # While the fast path awaits connection verification, another task can
+    # discard the global client. The captured local reference must be
+    # returned — re-reading the global would hand the caller None.
+    fake = _FakeTelegramClient(connected=True)
+    monkeypatch.setattr(client, "_client", fake)
+
+    async def discarding_verify(_client):
+        client._client = None  # simulate a concurrent _discard_client()
+
+    monkeypatch.setattr(client, "_verify_client_connection", discarding_verify)
+
+    result = asyncio.run(client.get_client())
+
+    assert result is fake

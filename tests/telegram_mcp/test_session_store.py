@@ -137,3 +137,30 @@ def test_encrypted_file_written_atomically_with_owner_only_permissions(monkeypat
     assert (session_file.stat().st_mode & 0o777) == 0o600
     # No temp file left behind.
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_failed_session_write_preserves_previous_file(monkeypatch, tmp_path):
+    # The write must be temp-file + os.replace: if the final swap fails, the
+    # previous session file is untouched and the temp file is removed. A
+    # direct write_text would have already clobbered the old content.
+    monkeypatch.setenv(session_store.CONFIG_DIR_ENV_VAR, str(tmp_path))
+    monkeypatch.setattr(
+        session_store.keyring,
+        "set_password",
+        lambda service, account, value: (_ for _ in ()).throw(session_store.NoKeyringError()),
+    )
+    session_file = tmp_path / session_store.SESSION_FILE_NAME
+    session_file.write_text("previous-session", encoding="utf-8")
+
+    import pytest
+
+    def failing_replace(_src, _dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(session_store.os, "replace", failing_replace)
+
+    with pytest.raises(OSError, match="disk full"):
+        session_store.save_session(_sample_session(), master_key="hunter2")
+
+    assert session_file.read_text(encoding="utf-8") == "previous-session"
+    assert list(tmp_path.glob("*.tmp")) == []

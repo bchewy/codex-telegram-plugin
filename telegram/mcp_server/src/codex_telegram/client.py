@@ -192,6 +192,8 @@ async def get_history_client(
     # Telethon raises if a takeout init request is sent while a previous
     # takeout session (opened with finalize=False) is still active. Calling
     # takeout() without scope kwargs reuses the active session instead.
+    # Telegram allows one takeout per session, so the active session's scope
+    # wins; use end_takeout_session first to start over with a new scope.
     if client.session.takeout_id is not None:
         async with client.takeout(finalize=False) as takeout:
             yield takeout
