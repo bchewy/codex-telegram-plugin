@@ -32,36 +32,36 @@ A Codex marketplace is a catalog of plugins. Its `interface.displayName` is the
 dropdown label in Codex, while this plugin's `interface.displayName` is the
 installable item shown inside that marketplace.
 
-For a single local selector, keep all local plugin entries in one user-level
-marketplace at `~/.agents/plugins/marketplace.json`. Do not keep a repo-local
-`.agents/plugins/marketplace.json` active for this checkout unless you
-intentionally want Codex to show this repository as a separate marketplace.
+This repository also hosts the `Bchewy Messaging` marketplace at
+`.agents/plugins/marketplace.json`. It exposes this repo's `telegram/` plugin
+bundle and the matching WhatsApp plugin from
+`bchewy/codex-whatsapp-plugin/whatsapp`.
 
-This repo's plugin bundle is `telegram/`. In the shared `Local Plugins`
-marketplace, the plugin should be installed as:
+Install the marketplace and both messaging plugins with:
 
 ```bash
-codex plugin add telegram@local
+codex plugin marketplace add bchewy/codex-telegram-plugin --ref main
+codex plugin add telegram@bchewy-messaging
+codex plugin add whatsapp@bchewy-messaging
 ```
 
-The matching WhatsApp plugin uses the same model: one `Local Plugins`
-marketplace, separate `telegram` and `whatsapp` plugin entries.
-
-For checkouts under `~/dev`, the relevant `plugins` entries look like this.
-Preserve any other plugins already present in your local marketplace file.
+The marketplace uses Git-backed subdirectory entries, so the catalog can live in
+one repo while each plugin continues to live in its own source repository:
 
 ```json
 {
-  "name": "local",
+  "name": "bchewy-messaging",
   "interface": {
-    "displayName": "Local Plugins"
+    "displayName": "Bchewy Messaging"
   },
   "plugins": [
     {
       "name": "telegram",
       "source": {
-        "source": "local",
-        "path": "./dev/codex-telegram-plugin/telegram"
+        "source": "git-subdir",
+        "url": "https://github.com/bchewy/codex-telegram-plugin.git",
+        "path": "./telegram",
+        "ref": "main"
       },
       "policy": {
         "installation": "AVAILABLE",
@@ -72,8 +72,10 @@ Preserve any other plugins already present in your local marketplace file.
     {
       "name": "whatsapp",
       "source": {
-        "source": "local",
-        "path": "./dev/codex-whatsapp-plugin/whatsapp"
+        "source": "git-subdir",
+        "url": "https://github.com/bchewy/codex-whatsapp-plugin.git",
+        "path": "./whatsapp",
+        "ref": "main"
       },
       "policy": {
         "installation": "AVAILABLE",
@@ -95,20 +97,19 @@ Preserve any other plugins already present in your local marketplace file.
 
 ## Step 1: Install the plugin in Codex
 
-This repo is designed to be installed from the shared local marketplace instead
-of registering itself as a separate marketplace.
-
-If your `~/.agents/plugins/marketplace.json` already includes this checkout,
-install the plugin with:
+Add the repo marketplace and install the Telegram plugin:
 
 ```bash
-codex plugin add telegram@local
+codex plugin marketplace add bchewy/codex-telegram-plugin --ref main
+codex plugin add telegram@bchewy-messaging
 ```
 
-If the local marketplace does not include it yet, add a `telegram` entry that
-points at this repo's `telegram/` directory, then rerun the command above. Keep
-the marketplace name as `local` and the display name as `Local Plugins` if you
-want it grouped with your other local plugins.
+Install the matching WhatsApp plugin from the same marketplace if you want both
+messaging integrations available:
+
+```bash
+codex plugin add whatsapp@bchewy-messaging
+```
 
 Open a fresh Codex session after installing. Old threads can miss newly
 installed plugin, skill, and MCP context.

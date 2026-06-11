@@ -1,0 +1,36 @@
+{
+  "name": "bchewy-messaging",
+  "interface": {
+    "displayName": "Bchewy Messaging"
+  },
+  "plugins": [
+    {
+      "name": "telegram",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/bchewy/codex-telegram-plugin.git",
+        "path": "./telegram",
+        "ref": "main"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "whatsapp",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/bchewy/codex-whatsapp-plugin.git",
+        "path": "./whatsapp",
+        "ref": "main"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
