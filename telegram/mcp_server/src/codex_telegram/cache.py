@@ -71,6 +71,9 @@ def cache_db_path() -> Path:
     base_dir = Path(xdg_cache_home).expanduser() if xdg_cache_home else Path.home() / ".cache"
     cache_dir = base_dir / "codex-telegram"
     cache_dir.mkdir(parents=True, exist_ok=True)
+    # The cache holds private message content; keep it owner-only even when
+    # encryption is not enabled.
+    os.chmod(cache_dir, 0o700)
     return cache_dir / CACHE_FILE_NAME
 
 
@@ -94,23 +97,45 @@ def connect_cache(path: str | Path | None = None):
     target = path if path is not None else cache_db_path()
     target_str = str(target)
     if target_str != ":memory:":
-        Path(target_str).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
+        expanded = Path(target_str).expanduser().resolve()
+        expanded.parent.mkdir(parents=True, exist_ok=True)
 
     connection = driver.connect(target_str)
-    connection.row_factory = sqlite3.Row
-
-    if cache_encryption_enabled():
-        master_key = os.getenv(MASTER_KEY_ENV_VAR)
-        if not master_key:
-            raise RuntimeError(
-                "Encrypted Telegram cache requires CODEX_TELEGRAM_MASTER_KEY."
-            )
-        escaped_key = master_key.replace("'", "''")
-        connection.execute(f"PRAGMA key = '{escaped_key}'")
-
     if target_str != ":memory:":
-        connection.execute("PRAGMA journal_mode = WAL")
-    connection.execute("PRAGMA foreign_keys = ON")
+        try:
+            os.chmod(expanded, 0o600)
+        except OSError:
+            pass
+    try:
+        # The pysqlcipher3 driver rejects stdlib sqlite3.Row, so always use
+        # the connected driver's own Row type.
+        connection.row_factory = driver.Row
+
+        if cache_encryption_enabled():
+            master_key = os.getenv(MASTER_KEY_ENV_VAR)
+            if not master_key:
+                raise RuntimeError(
+                    "Encrypted Telegram cache requires CODEX_TELEGRAM_MASTER_KEY."
+                )
+            escaped_key = master_key.replace("'", "''")
+            connection.execute(f"PRAGMA key = '{escaped_key}'")
+
+        try:
+            connection.execute("SELECT count(*) FROM sqlite_master")
+        except driver.DatabaseError as exc:
+            raise RuntimeError(
+                f"Could not read the Telegram cache at {target_str}. This usually "
+                f"means it was created with a different {CACHE_ENCRYPT_ENV_VAR} or "
+                f"{MASTER_KEY_ENV_VAR} setting. Fix the environment or delete the "
+                "cache file to rebuild it."
+            ) from exc
+
+        if target_str != ":memory:":
+            connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA foreign_keys = ON")
+    except BaseException:
+        connection.close()
+        raise
     return connection
 
 

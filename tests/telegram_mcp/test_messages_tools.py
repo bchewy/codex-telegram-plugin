@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+
 from codex_telegram.tools import messages
 
 
@@ -313,7 +315,9 @@ def test_search_in_chat_pages_past_newer_out_of_window_matches(monkeypatch):
     assert result["messages"] == [{"id": 4}, {"id": 3}]
     assert result["scanned_count"] == 3
     assert client.calls[0]["search"] == "launch"
-    assert client.calls[0]["offset_date"] == datetime(2026, 4, 4, 23, 59, 59, 1, tzinfo=UTC)
+    # The upper bound is padded a full second (sub-second pads truncate to a
+    # no-op in Telegram's wire format); exact bounds are enforced client-side.
+    assert client.calls[0]["offset_date"] == datetime(2026, 4, 5, 0, 0, 0, tzinfo=UTC)
 
 
 def test_search_global_reports_more_results_without_overfetching_payload(monkeypatch):
@@ -488,8 +492,11 @@ def test_bulk_fetch_history_forward_walk_advances_raw_ids_when_all_messages_empt
     assert result["oldest_fetched_id"] == 2
 
 
-def test_bulk_fetch_history_forward_walk_retries_one_chunk_after_flood_wait(monkeypatch):
-    # Forward walk from since=1 to highest=100 produces a single chunk [2..100].
+def test_bulk_fetch_history_forward_walk_raises_structured_flood_error(monkeypatch):
+    # Telethon auto-sleeps floods <= 60s internally, so any FloodWaitError
+    # that reaches the chunk fetcher needs a wait longer than the MCP tool
+    # timeout. The chunk must NOT sleep it inline (that stalls the shared
+    # client until the call is killed) — it must surface a structured error.
     client = _BulkClient(100, flood_chunk=tuple(range(2, 101)))
 
     @asynccontextmanager
@@ -503,14 +510,41 @@ def test_bulk_fetch_history_forward_walk_retries_one_chunk_after_flood_wait(monk
     monkeypatch.setattr(messages, "message_to_dict", lambda message: {"id": message.id})
     monkeypatch.setattr(messages.types, "MessageEmpty", _EmptyMessage)
     monkeypatch.setattr(messages.errors, "FloodWaitError", _FakeFloodWaitError)
-    monkeypatch.setattr(messages.asyncio, "sleep", _async_value(None))
 
-    result = asyncio.run(
-        messages.fetch_bulk_history_payload(chat_ref="chat:1", since_message_id=1)
-    )
+    with pytest.raises(messages.TelegramFloodWaitError) as excinfo:
+        asyncio.run(
+            messages.fetch_bulk_history_payload(chat_ref="chat:1", since_message_id=1)
+        )
 
-    assert result["count"] == 99
-    assert client.calls.count(tuple(range(2, 101))) == 2
+    assert excinfo.value.seconds == 1
+    assert excinfo.value.tool_name == "bulk_fetch_history"
+    # The flooded chunk is attempted exactly once — no sleep-and-retry.
+    assert client.calls.count(tuple(range(2, 101))) == 1
+
+
+def test_bulk_fetch_history_flood_error_attributes_caller_tool_name(monkeypatch):
+    client = _BulkClient(100, flood_chunk=tuple(range(2, 101)))
+
+    @asynccontextmanager
+    async def fake_history_client(**_kwargs):
+        yield client
+
+    monkeypatch.setattr(messages, "get_client", _async_value(SimpleNamespace()))
+    monkeypatch.setattr(messages, "get_history_client", fake_history_client)
+    monkeypatch.setattr(messages, "resolve_entity_fuzzy", _async_value(SimpleNamespace()))
+    monkeypatch.setattr(messages, "peer_ref", lambda entity: "chat:1")
+    monkeypatch.setattr(messages, "message_to_dict", lambda message: {"id": message.id})
+    monkeypatch.setattr(messages.types, "MessageEmpty", _EmptyMessage)
+    monkeypatch.setattr(messages.errors, "FloodWaitError", _FakeFloodWaitError)
+
+    with pytest.raises(messages.TelegramFloodWaitError) as excinfo:
+        asyncio.run(
+            messages.fetch_bulk_history_payload(
+                chat_ref="chat:1", since_message_id=1, tool_name="sync_chat_cache"
+            )
+        )
+
+    assert excinfo.value.tool_name == "sync_chat_cache"
 
 
 def test_bulk_fetch_history_bootstrap_walks_newest_first_via_iter_messages(monkeypatch):
@@ -1050,3 +1084,177 @@ def test_get_unread_global_mode_fetches_dialogs_concurrently(monkeypatch):
     assert client.max_concurrent >= 2
     returned_ids = sorted(m["id"] for m in result["messages"])
     assert returned_ids == [11, 12, 21, 22, 31, 32]
+
+
+def test_get_history_rejects_non_positive_limit(monkeypatch):
+    monkeypatch.setattr(messages, "get_client", _async_value(SimpleNamespace()))
+
+    with pytest.raises(ValueError, match="limit"):
+        asyncio.run(_tool_from("get_history")(chat_ref="chat:1", limit=0))
+
+
+def test_get_history_reports_has_more_when_truncated(monkeypatch):
+    history = [
+        SimpleNamespace(id=item_id, date=datetime(2026, 4, item_id, tzinfo=UTC))
+        for item_id in range(10, 0, -1)
+    ]
+    client = _HistoryClient(history)
+    monkeypatch.setattr(messages, "get_client", _async_value(client))
+    monkeypatch.setattr(messages, "resolve_entity_fuzzy", _async_value(SimpleNamespace()))
+    monkeypatch.setattr(messages, "iter_message_dicts", lambda items: [{"id": item.id} for item in items])
+    monkeypatch.setattr(messages, "peer_ref", lambda _entity: "chat:1")
+
+    truncated = asyncio.run(_tool_from("get_history")(chat_ref="chat:1", limit=3))
+    exhausted = asyncio.run(_tool_from("get_history")(chat_ref="chat:1", limit=50))
+
+    assert truncated["count"] == 3
+    assert truncated["has_more"] is True
+    assert exhausted["count"] == 10
+    assert exhausted["has_more"] is False
+
+
+def test_delete_messages_counts_deleted_messages_not_batches(monkeypatch):
+    entity = SimpleNamespace()
+
+    async def fake_delete_messages(_entity, ids, revoke):
+        # Telethon returns one AffectedMessages per 100-id RPC batch.
+        return [
+            SimpleNamespace(pts_count=100),
+            SimpleNamespace(pts_count=50),
+        ]
+
+    client = SimpleNamespace(delete_messages=fake_delete_messages)
+    monkeypatch.setattr(messages, "get_client", _async_value(client))
+    monkeypatch.setattr(messages, "resolve_entity", _async_value(entity))
+    monkeypatch.setattr(messages, "peer_ref", lambda _entity: "chat:1")
+    monkeypatch.setattr(messages, "require_destructive", lambda _tool, _confirm: None)
+
+    result = asyncio.run(
+        _tool_from("delete_messages")(
+            chat_ref="chat:1", message_ids=list(range(1, 151)), confirm=True
+        )
+    )
+
+    assert result["requested_count"] == 150
+    assert result["deleted_count"] == 150
+
+
+def test_forward_messages_skips_unforwardable_none_entries(monkeypatch):
+    forwarded = [SimpleNamespace(id=201), None, SimpleNamespace(id=202)]
+
+    async def fake_forward_messages(_target, _ids, from_peer, silent, schedule):
+        return forwarded
+
+    client = SimpleNamespace(forward_messages=fake_forward_messages)
+    monkeypatch.setattr(messages, "get_client", _async_value(client))
+    monkeypatch.setattr(messages, "resolve_entity", _async_value(SimpleNamespace()))
+    monkeypatch.setattr(messages, "peer_ref", lambda _entity: "chat:1")
+    monkeypatch.setattr(messages, "iter_message_dicts", lambda items: [{"id": item.id} for item in items])
+
+    result = asyncio.run(
+        _tool_from("forward_messages")(
+            from_chat_ref="chat:1", to_chat_ref="chat:2", message_ids=[1, 2, 3]
+        )
+    )
+
+    assert result["requested_count"] == 3
+    assert result["count"] == 2
+    assert result["skipped_count"] == 1
+    assert result["messages"] == [{"id": 201}, {"id": 202}]
+
+
+def test_global_search_requests_batched_pages(monkeypatch):
+    # One RPC per scanned message (limit=1) made a default scan cost up to
+    # 1000 sequential round-trips; pages must be requested in batches.
+    search_messages = [
+        SimpleNamespace(id=item_id, date=datetime(2026, 4, 10, tzinfo=UTC), peer_id=None)
+        for item_id in range(60, 0, -1)
+    ]
+
+    class _BatchedGlobalClient:
+        def __init__(self, items):
+            self.items = items
+            self.calls = []
+
+        async def __call__(self, request):
+            self.calls.append({"limit": request.limit, "offset_id": request.offset_id})
+            remaining = [
+                item
+                for item in self.items
+                if not request.offset_id or item.id < request.offset_id
+            ]
+            page = remaining[: request.limit]
+            return SimpleNamespace(messages=page, users=[], chats=[], next_rate=None)
+
+    client = _BatchedGlobalClient(search_messages)
+    monkeypatch.setattr(messages, "get_client", _async_value(client))
+    monkeypatch.setattr(messages, "iter_message_dicts", lambda items: [{"id": item.id} for item in items])
+
+    result = asyncio.run(
+        _tool_from("search_messages_global")(query="launch", limit=50, scan_limit=100)
+    )
+
+    assert result["count"] == 50
+    # 60 messages scanned in at most a couple of page-sized requests.
+    assert len(client.calls) <= 3
+    assert client.calls[0]["limit"] == 100
+
+
+def test_get_unread_single_chat_filters_outgoing_before_limit(monkeypatch):
+    entity = SimpleNamespace()
+    inbox = [
+        SimpleNamespace(id=30, out=True),
+        SimpleNamespace(id=29, out=False),
+        SimpleNamespace(id=28, out=True),
+        SimpleNamespace(id=27, out=False),
+        SimpleNamespace(id=26, out=False),
+    ]
+
+    class _Client:
+        async def iter_messages(self, _entity, min_id: int, limit: int):
+            assert min_id == 10
+            for item in inbox[:limit]:
+                yield item
+
+    dialog = SimpleNamespace(
+        unread_count=3,
+        dialog=SimpleNamespace(read_inbox_max_id=10),
+    )
+    monkeypatch.setattr(messages, "get_client", _async_value(_Client()))
+    monkeypatch.setattr(messages, "resolve_entity_fuzzy", _async_value(entity))
+    monkeypatch.setattr(messages, "_load_dialog", _async_value(dialog))
+    monkeypatch.setattr(messages, "peer_ref", lambda _entity: "chat:1")
+    monkeypatch.setattr(messages, "iter_message_dicts", lambda items: [{"id": item.id} for item in items])
+
+    result = asyncio.run(_tool_from("get_unread")(chat_ref="chat:1", limit=3))
+
+    # Outgoing messages must not crowd unread ones out of the page.
+    assert [item["id"] for item in result["messages"]] == [29, 27, 26]
+
+
+def test_end_takeout_session_reports_when_no_session_active(monkeypatch):
+    client = SimpleNamespace(session=SimpleNamespace(takeout_id=None))
+    monkeypatch.setattr(messages, "get_client", _async_value(client))
+
+    result = asyncio.run(_tool_from("end_takeout_session")())
+
+    assert result["ended"] is False
+
+
+def test_end_takeout_session_finalizes_active_session(monkeypatch):
+    calls = []
+
+    async def fake_end_takeout(success):
+        calls.append(success)
+        return True
+
+    client = SimpleNamespace(
+        session=SimpleNamespace(takeout_id=777),
+        end_takeout=fake_end_takeout,
+    )
+    monkeypatch.setattr(messages, "get_client", _async_value(client))
+
+    result = asyncio.run(_tool_from("end_takeout_session")(success=True))
+
+    assert calls == [True]
+    assert result == {"ok": True, "ended": True, "success": True}

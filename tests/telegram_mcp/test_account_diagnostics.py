@@ -66,3 +66,34 @@ def test_telegram_diagnostics_can_report_auth_error(monkeypatch, tmp_path):
         "type": "RuntimeError",
         "message": "not authenticated",
     }
+
+
+def test_logout_reports_local_clear_failure_instead_of_raising(monkeypatch):
+    calls = {"logged_out": False, "disconnected": False}
+
+    class _Client:
+        async def log_out(self):
+            calls["logged_out"] = True
+
+    async def fake_get_client():
+        return _Client()
+
+    async def fake_disconnect():
+        calls["disconnected"] = True
+
+    def fail_clear(master_key=None):
+        raise OSError("disk said no")
+
+    monkeypatch.setenv("CODEX_TELEGRAM_ALLOW_DESTRUCTIVE", "1")
+    monkeypatch.setattr(account, "get_client", fake_get_client)
+    monkeypatch.setattr(account, "disconnect_client", fake_disconnect)
+    monkeypatch.setattr(account, "clear_session", fail_clear)
+
+    result = asyncio.run(_tool_from("logout")(confirm=True))
+
+    # The server-side session is already invalidated by this point, so the
+    # tool must report the partial failure rather than raise.
+    assert calls == {"logged_out": True, "disconnected": True}
+    assert result["logged_out"] is True
+    assert result["cleared_local_session"] is False
+    assert "disk said no" in result["clear_error"]

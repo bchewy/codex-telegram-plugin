@@ -7,6 +7,9 @@ def test_redact_phone_masks_middle_digits():
     assert _redact_phone("+15555555555") == "+15*******55"
 
 
-def test_redact_phone_preserves_short_values():
+def test_redact_phone_masks_short_values_entirely():
     assert _redact_phone(None) is None
-    assert _redact_phone("1234") == "1234"
+    # Values too short to keep a meaningful prefix/suffix are fully masked
+    # rather than printed in cleartext.
+    assert _redact_phone("1234") == "****"
+    assert _redact_phone("12345") == "*****"

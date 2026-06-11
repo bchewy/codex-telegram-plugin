@@ -10,8 +10,11 @@ from .session_store import clear_session, describe_storage
 
 
 def _redact_phone(phone: str | None) -> str | None:
-    if not phone or len(phone) < 5:
+    if not phone:
         return phone
+    if len(phone) <= 5:
+        # Too short to keep a meaningful prefix/suffix; mask everything.
+        return "*" * len(phone)
     return phone[:3] + "*" * (len(phone) - 5) + phone[-2:]
 
 

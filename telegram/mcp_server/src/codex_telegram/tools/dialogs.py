@@ -26,9 +26,13 @@ def register(mcp) -> None:
         ignore_pinned: bool = False,
     ) -> dict:
         """List Telegram dialogs ordered like the official client."""
+        if limit <= 0:
+            raise ValueError("limit must be > 0")
         client = await get_client()
+        # A query must filter the full dialog list before the limit is
+        # applied, or matches outside the first `limit` dialogs are missed.
         dialogs = await client.get_dialogs(
-            limit=limit,
+            limit=None if query else limit,
             archived=archived,
             ignore_pinned=ignore_pinned,
         )
@@ -40,7 +44,7 @@ def register(mcp) -> None:
                 for item in items
                 if lowered in (item["title"] or "").casefold()
                 or lowered in (item["display_name"] or "").casefold()
-            ]
+            ][:limit]
         return {"count": len(items), "dialogs": items}
 
     @mcp.tool()
@@ -70,6 +74,7 @@ def register(mcp) -> None:
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
         await client.edit_folder(entity, 1)
+        invalidate_dialog_cache(client)
         return {"chat_ref": peer_ref(entity), "archived": True}
 
     @mcp.tool()
@@ -79,6 +84,7 @@ def register(mcp) -> None:
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
         await client.edit_folder(entity, 0)
+        invalidate_dialog_cache(client)
         return {"chat_ref": peer_ref(entity), "archived": False}
 
     @mcp.tool()
@@ -104,7 +110,7 @@ def register(mcp) -> None:
                 ),
             )
         )
-        return {"chat_ref": chat_ref, "muted_until": until.isoformat(), "silent": silent}
+        return {"chat_ref": peer_ref(input_peer), "muted_until": until.isoformat(), "silent": silent}
 
     @mcp.tool()
     @with_flood_wait
@@ -113,7 +119,8 @@ def register(mcp) -> None:
         client = await get_client()
         input_peer = await resolve_input_peer(client, chat_ref)
         await client(functions.messages.ToggleDialogPinRequest(peer=input_peer, pinned=True))
-        return {"chat_ref": chat_ref, "pinned": True}
+        invalidate_dialog_cache(client)
+        return {"chat_ref": peer_ref(input_peer), "pinned": True}
 
     @mcp.tool()
     @with_flood_wait
@@ -122,7 +129,8 @@ def register(mcp) -> None:
         client = await get_client()
         input_peer = await resolve_input_peer(client, chat_ref)
         await client(functions.messages.ToggleDialogPinRequest(peer=input_peer, pinned=False))
-        return {"chat_ref": chat_ref, "pinned": False}
+        invalidate_dialog_cache(client)
+        return {"chat_ref": peer_ref(input_peer), "pinned": False}
 
     @mcp.tool()
     @with_flood_wait

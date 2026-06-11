@@ -50,10 +50,25 @@ def test_vote_poll_rejects_out_of_range_indices(monkeypatch):
             )
         )
     )
-    client = SimpleNamespace(get_messages=_async_value(poll_message))
+    client = SimpleNamespace(
+        get_messages=_async_value(poll_message),
+        get_input_entity=_async_value(SimpleNamespace()),
+    )
     monkeypatch.setattr(extras, "get_client", _async_value(client))
     monkeypatch.setattr(extras, "resolve_entity", _async_value(SimpleNamespace()))
-    monkeypatch.setattr(extras, "resolve_input_peer", _async_value(SimpleNamespace()))
 
     with pytest.raises(ValueError, match="option index"):
         asyncio.run(vote_poll(chat_ref="chat:1", message_id=1, option_indices=[2]))
+
+
+def test_cancel_scheduled_rejects_explicit_empty_list(monkeypatch):
+    # An explicit empty list used to be treated as falsy and silently
+    # cancelled ALL scheduled messages in the dialog.
+    monkeypatch.setenv("CODEX_TELEGRAM_ALLOW_DESTRUCTIVE", "1")
+    mcp = _FakeMCP()
+    extras.register(mcp)
+
+    with pytest.raises(ValueError, match="message_ids must not be empty"):
+        asyncio.run(
+            mcp.tools["cancel_scheduled"](chat_ref="chat:1", message_ids=[], confirm=True)
+        )

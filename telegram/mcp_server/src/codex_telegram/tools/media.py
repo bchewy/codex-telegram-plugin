@@ -44,6 +44,9 @@ def _resolve_skill_script(name: str) -> Path:
     raise FileNotFoundError(f"could not locate skill script {name}")
 
 
+INSPECT_SCRIPT_TIMEOUT_SECONDS = 300.0
+
+
 async def _inspect_media_file(script: Path, media_path: str | Path, output_dir: Path | None = None) -> dict:
     command = ["bash", str(script), str(media_path)]
     if output_dir is not None:
@@ -54,13 +57,27 @@ async def _inspect_media_file(script: Path, media_path: str | Path, output_dir: 
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(), timeout=INSPECT_SCRIPT_TIMEOUT_SECONDS
+        )
+    except (TimeoutError, asyncio.CancelledError) as exc:
+        # Don't leave an orphaned ffmpeg/whisper process behind when the
+        # inspection times out or the MCP call is cancelled.
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        raise RuntimeError(
+            f"{script.name} timed out after {INSPECT_SCRIPT_TIMEOUT_SECONDS:.0f}s"
+        ) from exc
 
     if proc.returncode != 0:
-        error = stderr.decode().strip() or f"{script.name} failed"
+        error = stderr.decode(errors="replace").strip() or f"{script.name} failed"
         raise RuntimeError(error)
 
-    lines = [line.strip() for line in stdout.decode().splitlines() if line.strip()]
+    lines = [line.strip() for line in stdout.decode(errors="replace").splitlines() if line.strip()]
     if not lines:
         raise RuntimeError(f"{script.name} did not return a JSON payload")
 

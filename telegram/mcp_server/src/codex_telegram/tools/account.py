@@ -108,8 +108,19 @@ def register(mcp) -> None:
         client = await get_client()
         await client.log_out()
         await disconnect_client()
-        cleared = clear_session(master_key=os.getenv("CODEX_TELEGRAM_MASTER_KEY"))
-        return {"logged_out": True, "cleared_local_session": cleared}
+        # The server session is already invalidated; a local-clear failure
+        # must be reported rather than raised, or the caller would believe
+        # the logout failed while stale credentials remain on disk.
+        try:
+            cleared = clear_session(master_key=os.getenv(MASTER_KEY_ENV_VAR))
+            clear_error = None
+        except Exception as exc:
+            cleared = False
+            clear_error = f"{type(exc).__name__}: {exc}"
+        result = {"logged_out": True, "cleared_local_session": cleared}
+        if clear_error:
+            result["clear_error"] = clear_error
+        return result
 
     @mcp.tool()
     @with_flood_wait

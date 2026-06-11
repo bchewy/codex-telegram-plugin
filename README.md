@@ -264,11 +264,10 @@ uv run --project ./telegram/mcp_server codex-telegram whoami
 # log out / clear the stored session
 uv run --project ./telegram/mcp_server codex-telegram logout
 
-# run tests
-uv run --project ./telegram/mcp_server pytest
-
-# run tests with coverage; this writes telegram/coverage/coverage.xml for Plugin Eval
-uv run --project ./telegram/mcp_server pytest
+# run tests (run from telegram/mcp_server so the pytest config and coverage
+# settings in its pyproject.toml are picked up; this also writes
+# telegram/coverage/coverage.xml for Plugin Eval)
+cd telegram/mcp_server && uv run pytest
 ```
 
 ### Installed-bundle flow
@@ -337,6 +336,9 @@ Do not pass the master key as a CLI flag. It ends up in shell history and `ps`.
 | `CODEX_TELEGRAM_CACHE_ENCRYPT`     | Optional: set to `1` to encrypt the local SQLite message cache. Requires `pysqlcipher3` plus `CODEX_TELEGRAM_MASTER_KEY`.                    |
 | `CODEX_TELEGRAM_ALLOW_DESTRUCTIVE` | Must be set to `1` plus `confirm=True` on the tool call before destructive tools like `delete_chat`, `delete_messages`, or `logout` will run. |
 | `CODEX_TELEGRAM_UPLOAD_DIR`        | Upload sandbox for `send_*` and `set_profile_photo`. Files outside this directory require `allow_arbitrary_path=True`.                        |
+| `CODEX_TELEGRAM_CONFIG_DIR`        | Optional: overrides the config directory that stores the encrypted session file (default `~/.config/codex-telegram`).                         |
+| `CODEX_TELEGRAM_MEDIA_SCRIPTS_DIR` | Optional: overrides the directory containing the `telegram-media-inspect` scripts used by `inspect_message_media`.                            |
+| `XDG_CACHE_HOME`                   | Optional (standard XDG var): changes where the local message cache lives (default `~/.cache/codex-telegram/cache.db`).                        |
 
 
 ## Local cache: use it for broad, old, repeated, or aggregate work

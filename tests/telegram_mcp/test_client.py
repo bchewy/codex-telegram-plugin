@@ -177,3 +177,69 @@ def test_with_flood_wait_rejects_long_waits_without_retry(monkeypatch):
     assert captured.value.seconds == 120
     assert captured.value.attempts == 1
     assert slept == []
+
+
+class _TakeoutContext:
+    def __init__(self, owner, kwargs):
+        self._owner = owner
+        self._kwargs = kwargs
+
+    async def __aenter__(self):
+        if self._owner.session.takeout_id is not None and self._kwargs:
+            # Mirrors Telethon: an init request while a takeout is active
+            # raises instead of reusing the session.
+            raise ValueError("Can't send a takeout request while another is active")
+        self._owner.session.takeout_id = 999
+        return self._owner
+
+    async def __aexit__(self, *_exc):
+        return False
+
+
+class _TakeoutCapableClient(_FakeTelegramClient):
+    def __init__(self, *, takeout_id=None, **kwargs):
+        super().__init__(**kwargs)
+        self.session = SimpleNamespace(takeout_id=takeout_id)
+        self.takeout_calls: list[dict] = []
+
+    def takeout(self, finalize: bool = True, **kwargs):
+        self.takeout_calls.append({"finalize": finalize, **kwargs})
+        return _TakeoutContext(self, kwargs)
+
+
+def test_get_history_client_reuses_active_takeout_session(monkeypatch):
+    fake = _TakeoutCapableClient(connected=True, takeout_id=123)
+
+    async def fake_get_client():
+        return fake
+
+    monkeypatch.setattr(client, "get_client", fake_get_client)
+
+    async def run():
+        async with client.get_history_client(use_takeout=True) as history_client:
+            return history_client
+
+    result = asyncio.run(run())
+
+    assert result is fake
+    # The reuse path must not pass scope kwargs (those force a new init
+    # request, which raises while a takeout session is active).
+    assert fake.takeout_calls == [{"finalize": False}]
+
+
+def test_get_history_client_initializes_takeout_when_none_active(monkeypatch):
+    fake = _TakeoutCapableClient(connected=True, takeout_id=None)
+
+    async def fake_get_client():
+        return fake
+
+    monkeypatch.setattr(client, "get_client", fake_get_client)
+
+    async def run():
+        async with client.get_history_client(use_takeout=True) as history_client:
+            return history_client
+
+    asyncio.run(run())
+
+    assert fake.takeout_calls[0]["finalize"] is False
+    assert fake.takeout_calls[0]["users"] is True
