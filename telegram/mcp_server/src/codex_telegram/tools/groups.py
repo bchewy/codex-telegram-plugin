@@ -2,12 +2,40 @@ from __future__ import annotations
 
 from telethon import errors, functions, types, utils as tg_utils
 
-from ..client import get_client, with_flood_wait
-from ..helpers import entity_kind, get_chat_id, peer_ref, resolve_entity, resolve_input_channel, resolve_input_user, to_iso, user_to_dict
+from ..client import get_client, invalidate_dialog_cache, with_flood_wait
+from ..helpers import (
+    entity_kind,
+    get_chat_id,
+    peer_ref,
+    resolve_entity,
+    resolve_input_channel,
+    resolve_input_user,
+    to_iso,
+    user_to_dict,
+)
 from ..safety import require_destructive
 
 
 def _summarize_updates(result) -> dict:
+    # Telethon >= 1.43: CreateChatRequest/AddChatUserRequest/InviteToChannelRequest
+    # return messages.InvitedUsers, which wraps the Updates object and reports
+    # invitees that could not be added.
+    missing_invitees: list[dict] | None = None
+    if hasattr(result, "missing_invitees"):
+        missing_invitees = [
+            {
+                "user_ref": f"user:{invitee.user_id}",
+                "premium_would_allow_invite": bool(
+                    getattr(invitee, "premium_would_allow_invite", False)
+                ),
+                "premium_required_for_pm": bool(
+                    getattr(invitee, "premium_required_for_pm", False)
+                ),
+            }
+            for invitee in result.missing_invitees
+        ]
+        result = getattr(result, "updates", result)
+
     chats = []
     for chat in getattr(result, "chats", []):
         chats.append(
@@ -19,7 +47,10 @@ def _summarize_updates(result) -> dict:
             }
         )
     users = [user_to_dict(user) for user in getattr(result, "users", []) if isinstance(user, types.User)]
-    return {"chats": chats, "users": users}
+    summary = {"chats": chats, "users": users}
+    if missing_invitees is not None:
+        summary["missing_invitees"] = missing_invitees
+    return summary
 
 
 def register(mcp) -> None:
@@ -30,6 +61,7 @@ def register(mcp) -> None:
         client = await get_client()
         users = [await resolve_input_user(client, ref) for ref in user_refs]
         result = await client(functions.messages.CreateChatRequest(users=users, title=title, ttl_period=ttl_period))
+        invalidate_dialog_cache(client)
         summary = _summarize_updates(result)
         summary["title"] = title
         return summary
@@ -54,6 +86,7 @@ def register(mcp) -> None:
                 forum=forum,
             )
         )
+        invalidate_dialog_cache(client)
         summary = _summarize_updates(result)
         summary["title"] = title
         summary["about"] = about
@@ -135,8 +168,10 @@ def register(mcp) -> None:
         add_admins: bool | None = None,
         manage_call: bool | None = None,
         anonymous: bool | None = None,
+        confirm: bool = False,
     ) -> dict:
         """Promote a user to admin in a supergroup/channel."""
+        require_destructive("promote_admin", confirm)
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
         user = await resolve_entity(client, user_ref)
@@ -200,6 +235,7 @@ def register(mcp) -> None:
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
         await client.delete_dialog(entity)
+        invalidate_dialog_cache(client)
         return {"chat_ref": peer_ref(entity), "left": True}
 
     @mcp.tool()
@@ -209,6 +245,13 @@ def register(mcp) -> None:
         require_destructive("delete_chat", confirm)
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
+        if not isinstance(entity, (types.Chat, types.Channel)):
+            # Wrong-kind refs must error rather than reach the except-ValueError
+            # fallback below, which would silently delete the dialog instead.
+            raise ValueError(
+                f"{chat_ref} is not a group or channel; delete_chat only "
+                "deletes groups/channels."
+            )
         deleted = False
         fell_back_to_leave = False
         fallback_succeeded = False
@@ -230,6 +273,7 @@ def register(mcp) -> None:
             except Exception as inner:
                 error = f"{error}; fallback failed: {type(inner).__name__}: {inner}"
 
+        invalidate_dialog_cache(client)
         return {
             "chat_ref": peer_ref(entity),
             "deleted": deleted,
@@ -259,12 +303,26 @@ def register(mcp) -> None:
         entity = await resolve_entity(client, chat_ref)
 
         if isinstance(entity, types.Chat):
-            participants = await client.get_participants(entity, limit=limit)
-            admins = []
-            for user in participants:
-                permissions = await client.get_permissions(entity, user)
-                if permissions and permissions.is_admin:
-                    admins.append(user_to_dict(user))
+            # One GetFullChatRequest lists every participant's role, instead of
+            # an extra get_permissions round-trip per member.
+            full = await client(functions.messages.GetFullChatRequest(chat_id=get_chat_id(entity)))
+            participants = getattr(full.full_chat, "participants", None)
+            admin_ids = {
+                participant.user_id
+                for participant in getattr(participants, "participants", [])
+                if isinstance(
+                    participant,
+                    (types.ChatParticipantAdmin, types.ChatParticipantCreator),
+                )
+            }
+            users_by_id = {
+                user.id: user for user in full.users if isinstance(user, types.User)
+            }
+            admins = [
+                user_to_dict(users_by_id[user_id])
+                for user_id in sorted(admin_ids)
+                if user_id in users_by_id
+            ][:limit]
         else:
             admins_raw = await client.get_participants(
                 entity,

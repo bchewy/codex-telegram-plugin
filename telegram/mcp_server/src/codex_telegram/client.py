@@ -130,27 +130,31 @@ async def _verify_client_connection(client: TelegramClient) -> None:
 async def get_client() -> TelegramClient:
     global _client, _last_client_verify_monotonic
 
-    if _client:
+    # Capture a local reference: the verify call awaits, and a concurrent
+    # caller may discard the global `_client` in the meantime.
+    client = _client
+    if client:
         try:
-            await _verify_client_connection(_client)
-            return _client
+            await _verify_client_connection(client)
+            return client
         except ConnectionError:
             pass
 
     async with _client_lock:
-        if _client:
+        client = _client
+        if client:
             try:
-                await _verify_client_connection(_client)
-                return _client
+                await _verify_client_connection(client)
+                return client
             except ConnectionError:
                 pass
 
         try:
             record = load_session()
         except MissingSessionError as exc:
-            raise RuntimeError(
-                "Telegram is not authenticated. Run `python -m codex_telegram login` first."
-            ) from exc
+            # Preserve the storage-layer detail: "encrypted session found but
+            # no master key" needs a different remediation than "no session".
+            raise RuntimeError(f"Telegram is not authenticated. {exc}") from exc
 
         client = _build_client(record.session_string, record.api_id, record.api_hash)
         await client.connect()
@@ -185,6 +189,16 @@ async def get_history_client(
     if takeout_kwargs:
         options.update(takeout_kwargs)
 
+    # Telethon raises if a takeout init request is sent while a previous
+    # takeout session (opened with finalize=False) is still active. Calling
+    # takeout() without scope kwargs reuses the active session instead.
+    # Telegram allows one takeout per session, so the active session's scope
+    # wins; use end_takeout_session first to start over with a new scope.
+    if client.session.takeout_id is not None:
+        async with client.takeout(finalize=False) as takeout:
+            yield takeout
+        return
+
     try:
         async with client.takeout(finalize=False, **options) as takeout:
             yield takeout
@@ -198,6 +212,15 @@ async def get_history_client(
 def with_flood_wait(
     func: Callable[P, Awaitable[R]], *, max_sleep_seconds: int = 60
 ) -> Callable[P, Awaitable[R]]:
+    """Convert propagated FloodWaitErrors into structured TelegramFloodWaitErrors.
+
+    Telethon itself auto-sleeps floods up to its `flood_sleep_threshold`
+    (60s by default), so with default settings every error reaching this
+    wrapper exceeds `max_sleep_seconds` and is re-raised immediately as a
+    structured error. The sleep-and-retry branch only engages when the
+    client is configured with a lower threshold.
+    """
+
     @functools.wraps(func)
     async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         attempts = 0

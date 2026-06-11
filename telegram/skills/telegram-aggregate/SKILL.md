@@ -1,6 +1,6 @@
 ---
 name: telegram-aggregate
-description: Aggregate cached Telegram history by day, week, or sender. Use when the user wants volume trends, participation breakdowns, or quick stats across a group/channel history.
+description: Use when cached Telegram volume or sender stats are requested.
 ---
 
 1. Resolve the target dialog and time window first; aggregates require a dialog-scoped cache.

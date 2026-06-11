@@ -54,3 +54,33 @@ def test_resolve_upload_path_rejects_sensitive_paths(monkeypatch, tmp_path):
 
     with pytest.raises(PermissionError, match="sensitive path"):
         resolve_upload_path(str(sensitive), allow_arbitrary_path=True)
+
+
+def test_resolve_upload_path_denies_nested_sensitive_paths(monkeypatch, tmp_path):
+    fake_home = tmp_path / "home"
+    nested = fake_home / ".ssh" / "keys"
+    nested.mkdir(parents=True)
+    secret = nested / "id_ed25519"
+    secret.write_text("private", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: fake_home))
+    monkeypatch.setenv("CODEX_TELEGRAM_UPLOAD_DIR", str(tmp_path / "uploads"))
+
+    with pytest.raises(PermissionError, match="sensitive"):
+        resolve_upload_path(str(secret), allow_arbitrary_path=True)
+
+
+def test_resolve_upload_path_allows_sibling_of_denied_prefix(monkeypatch, tmp_path):
+    # `.ssh-backup` shares a string prefix with `.ssh` but is a different
+    # directory; component-wise matching must not over-block it.
+    fake_home = tmp_path / "home"
+    sibling = fake_home / ".ssh-backup"
+    sibling.mkdir(parents=True)
+    file_path = sibling / "notes.txt"
+    file_path.write_text("ok", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: fake_home))
+    monkeypatch.setenv("CODEX_TELEGRAM_UPLOAD_DIR", str(tmp_path / "uploads"))
+
+    resolved, warning = resolve_upload_path(str(file_path), allow_arbitrary_path=True)
+
+    assert resolved == file_path.resolve()
+    assert warning is not None

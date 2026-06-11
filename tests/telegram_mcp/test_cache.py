@@ -319,3 +319,162 @@ def test_summarize_chat_history_handles_empty_chunk_after_count(monkeypatch, tmp
     assert result["from_id"] is None
     assert result["to_id"] is None
     assert result["messages"] == []
+
+
+def test_connect_cache_uses_the_drivers_own_row_type(monkeypatch):
+    # pysqlcipher3 rejects stdlib sqlite3.Row; connect_cache must assign the
+    # connected driver's Row class, not sqlite3's.
+    import sqlite3
+
+    class _FakeRow:
+        pass
+
+    class _FakeConnection:
+        def __init__(self):
+            self.row_factory = None
+            self.closed = False
+            self.statements: list[str] = []
+
+        def execute(self, sql, *args):
+            self.statements.append(sql)
+            return self
+
+        def close(self):
+            self.closed = True
+
+    fake_connection = _FakeConnection()
+    fake_driver = type(
+        "FakeDriver",
+        (),
+        {
+            "Row": _FakeRow,
+            "DatabaseError": sqlite3.DatabaseError,
+            "connect": staticmethod(lambda _path: fake_connection),
+        },
+    )
+    monkeypatch.setattr(cache, "_cache_driver", lambda: fake_driver)
+
+    connection = cache.connect_cache(":memory:")
+
+    assert connection is fake_connection
+    assert connection.row_factory is _FakeRow
+
+
+def test_connect_cache_closes_connection_when_setup_fails(monkeypatch):
+    import sqlite3
+
+    class _FakeConnection:
+        def __init__(self):
+            self.row_factory = None
+            self.closed = False
+
+        def execute(self, _sql, *args):
+            raise sqlite3.DatabaseError("file is not a database")
+
+        def close(self):
+            self.closed = True
+
+    fake_connection = _FakeConnection()
+    fake_driver = type(
+        "FakeDriver",
+        (),
+        {
+            "Row": sqlite3.Row,
+            "DatabaseError": sqlite3.DatabaseError,
+            "connect": staticmethod(lambda _path: fake_connection),
+        },
+    )
+    monkeypatch.setattr(cache, "_cache_driver", lambda: fake_driver)
+
+    with pytest.raises(RuntimeError, match="CODEX_TELEGRAM_CACHE_ENCRYPT"):
+        cache.connect_cache(":memory:")
+
+    assert fake_connection.closed is True
+
+
+def test_sync_chat_cache_records_state_for_empty_chats(monkeypatch, tmp_path: Path):
+    db_path = tmp_path / "cache.db"
+
+    async def fake_fetch_bulk_history_payload(**_kwargs):
+        return {
+            "chat_ref": "chat:1",
+            "count": 0,
+            "deleted_count": 0,
+            "from_id": None,
+            "to_id": None,
+            "messages": [],
+            "truncated": False,
+            "next_since_message_id": None,
+            "used_takeout": False,
+        }
+
+    monkeypatch.setattr(cache_tools, "fetch_bulk_history_payload", fake_fetch_bulk_history_payload)
+    monkeypatch.setattr(cache_tools, "_canonical_chat_ref", lambda chat_ref: asyncio.sleep(0, result="chat:1"))
+    monkeypatch.setattr(cache_tools, "connect_cache", lambda: cache.connect_cache(db_path))
+
+    result = asyncio.run(_tool_from("sync_chat_cache")(chat_ref="chat:1"))
+
+    connection = cache.connect_cache(db_path)
+    try:
+        cache.ensure_cache_schema(connection)
+        state = cache.get_chat_sync_state(connection, "chat:1")
+    finally:
+        connection.close()
+
+    # Empty chats must still be recorded as synced so summarize and
+    # auto-sync staleness checks do not retry forever.
+    assert result["max_cached_id"] == 0
+    assert state is not None
+    assert state["max_cached_id"] == 0
+
+
+def test_search_cache_auto_sync_is_bounded_to_one_batch(monkeypatch, tmp_path: Path):
+    db_path = tmp_path / "cache.db"
+    sync_kwargs: list[dict] = []
+
+    async def fake_fetch_bulk_history_payload(**kwargs):
+        sync_kwargs.append(kwargs)
+        batch_no = len(sync_kwargs)
+        message_id = batch_no
+        return {
+            "chat_ref": "chat:1",
+            "count": 1,
+            "deleted_count": 0,
+            "from_id": message_id,
+            "to_id": message_id,
+            "messages": [_payload(message_id, day=18, text="hello world")],
+            # Pretend more history remains, with an advancing cursor: an
+            # unbounded auto-sync would keep fetching (up to the 5th batch)
+            # instead of stopping after one.
+            "truncated": batch_no < 5,
+            "next_since_message_id": message_id if batch_no < 5 else None,
+            "used_takeout": False,
+        }
+
+    monkeypatch.setattr(cache_tools, "fetch_bulk_history_payload", fake_fetch_bulk_history_payload)
+    monkeypatch.setattr(cache_tools, "_canonical_chat_ref", lambda chat_ref: asyncio.sleep(0, result="chat:1"))
+    monkeypatch.setattr(cache_tools, "_sender_ref", lambda from_user: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(cache_tools, "connect_cache", lambda: cache.connect_cache(db_path))
+
+    result = asyncio.run(
+        _tool_from("search_cache")(chat_ref="chat:1", query="hello", auto_sync_seconds=60)
+    )
+
+    assert len(sync_kwargs) == 1
+    assert result["auto_synced"] is True
+    assert result["auto_sync_truncated"] is True
+    assert result["count"] == 1
+
+
+def test_cache_dir_and_db_file_are_owner_only(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+
+    db_path = cache.cache_db_path()
+    connection = cache.connect_cache(db_path)
+    try:
+        cache.ensure_cache_schema(connection)
+    finally:
+        connection.close()
+
+    assert (db_path.parent.stat().st_mode & 0o777) == 0o700
+    assert (db_path.stat().st_mode & 0o777) == 0o600

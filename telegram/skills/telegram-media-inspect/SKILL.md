@@ -1,6 +1,6 @@
 ---
 name: telegram-media-inspect
-description: This skill should be used when the user asks to "watch this Telegram bubble", "listen to this Telegram voice note", "transcribe this Telegram audio", "see what this Telegram video says", "inspect this Telegram media", "check this Telegram video note", or wants help understanding audio/video content from the Telegram plugin.
+description: Use when the user asks to inspect, watch, listen to, transcribe, or understand Telegram voice notes, video notes, audio files, videos, or other message media.
 ---
 
 Inspect Telegram media with the plugin's media tools plus the bundled one-shot inspection scripts in this skill.

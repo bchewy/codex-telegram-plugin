@@ -1,6 +1,6 @@
 ---
 name: telegram-search
-description: Cache-first search for Telegram messages by query, dialog, sender, or time window. Use for finding messages, locating discussion context, or answering questions from past chats; prefer cached search for known dialogs, broad/old windows, repeated searches, or exhaustive results.
+description: Use when finding Telegram messages by query or window.
 ---
 
 1. Convert the user’s request into a precise search query, target dialog(s), sender filter, and time window.

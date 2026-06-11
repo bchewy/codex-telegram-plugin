@@ -85,8 +85,18 @@ def _write_encrypted_file(record: StoredSession, master_key: str) -> None:
     file_path = _session_file()
     _ensure_parent(file_path)
     payload = _encrypt_payload(record.to_json(), master_key)
-    file_path.write_text(json.dumps(payload), encoding="utf-8")
-    os.chmod(file_path, 0o600)
+    # Write atomically with owner-only permissions from the start; a plain
+    # write_text + chmod leaves a window where the file is world-readable
+    # (and a crash mid-write would corrupt the stored session).
+    tmp_path = file_path.with_name(file_path.name + ".tmp")
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload))
+        os.replace(tmp_path, file_path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def _prompt_master_key(prompt: str = "Telegram session master key: ") -> str:
@@ -119,7 +129,9 @@ def _read_keyring() -> StoredSession | None:
         return None
     try:
         return StoredSession.from_json(raw)
-    except JSONDecodeError:
+    except (JSONDecodeError, TypeError, ValueError, KeyError):
+        # A malformed keyring payload should fall through to the next
+        # storage backend, not crash every session load.
         return None
 
 
@@ -179,6 +191,9 @@ def save_session(
 
 
 def clear_session(master_key: str | None = None, *, prompt_if_missing: bool = False) -> bool:
+    # `master_key` and `prompt_if_missing` are kept for call-site
+    # compatibility; deleting the encrypted file never required the key.
+    del master_key, prompt_if_missing
     removed = False
 
     try:
@@ -189,15 +204,6 @@ def clear_session(master_key: str | None = None, *, prompt_if_missing: bool = Fa
 
     file_path = _session_file()
     if file_path.exists():
-        master_key = master_key or os.getenv(MASTER_KEY_ENV_VAR)
-        if not master_key:
-            if prompt_if_missing:
-                master_key = _prompt_master_key()
-            else:
-                raise MissingSessionError(
-                    "Encrypted Telegram session exists. Provide CODEX_TELEGRAM_MASTER_KEY "
-                    "to clear it."
-                )
         file_path.unlink()
         removed = True
 

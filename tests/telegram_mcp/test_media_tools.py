@@ -95,7 +95,9 @@ def test_inspect_message_media_downloads_and_runs_script(monkeypatch):
         captured["kwargs"] = kwargs
         return _FakeProcess(
             stdout=(
-                b'{"transcript_path":"/tmp/video.txt","contact_sheet_path":"/tmp/contact.jpg","frames_dir":"/tmp/frames"}\n'
+                b'{"transcript_path":"/tmp/video.txt",'
+                b'"contact_sheet_path":"/tmp/contact.jpg",'
+                b'"frames_dir":"/tmp/frames"}\n'
             )
         )
 
@@ -163,3 +165,39 @@ def test_inspect_media_file_rejects_non_object_json(monkeypatch):
 
     with pytest.raises(RuntimeError, match="expected object"):
         asyncio.run(media._inspect_media_file(Path("/fake/inspect_bubble.sh"), "/tmp/video.mp4"))
+
+
+def test_inspect_media_file_kills_hung_subprocess_on_timeout(monkeypatch):
+    killed = []
+
+    class _HungProcess:
+        pid = 4242
+        returncode = None
+
+        async def communicate(self):
+            await asyncio.sleep(3600)
+
+        async def wait(self):
+            self.returncode = -9
+
+        def kill(self):
+            killed.append("kill")
+
+    async def fake_create_subprocess_exec(*_args, **kwargs):
+        # The subprocess must run in its own process group so the kill
+        # reaches ffmpeg/whisper children, not just the bash wrapper.
+        assert kwargs.get("start_new_session") is True
+        return _HungProcess()
+
+    def fake_killpg(pid, sig):
+        assert pid == 4242
+        killed.append("killpg")
+
+    monkeypatch.setattr(media.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(media.os, "killpg", fake_killpg)
+    monkeypatch.setattr(media, "INSPECT_SCRIPT_TIMEOUT_SECONDS", 0.05)
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        asyncio.run(media._inspect_media_file(Path("/fake/inspect_bubble.sh"), "/tmp/video.mp4"))
+
+    assert killed == ["killpg"]

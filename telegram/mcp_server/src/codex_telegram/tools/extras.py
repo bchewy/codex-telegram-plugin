@@ -5,7 +5,14 @@ import random
 from telethon import functions, types
 
 from ..client import get_client, with_flood_wait
-from ..helpers import coerce_message_ids, draft_to_dict, message_to_dict, parse_datetime, peer_ref, resolve_entity, resolve_input_peer
+from ..helpers import (
+    coerce_message_ids,
+    draft_to_dict,
+    message_to_dict,
+    parse_datetime,
+    peer_ref,
+    resolve_entity,
+)
 from ..safety import require_destructive
 
 
@@ -40,7 +47,8 @@ def register(mcp) -> None:
             raise ValueError("A poll needs at least two options.")
 
         client = await get_client()
-        input_peer = await resolve_input_peer(client, chat_ref)
+        entity = await resolve_entity(client, chat_ref)
+        input_peer = await client.get_input_entity(entity)
         poll_answers = [
             types.PollAnswer(text=_text_with_entities(option), option=str(index).encode("utf-8"))
             for index, option in enumerate(options)
@@ -66,7 +74,7 @@ def register(mcp) -> None:
         sent_messages = [update.message for update in getattr(result, "updates", []) if hasattr(update, "message")]
         message_obj = sent_messages[-1] if sent_messages else None
         return {
-            "chat_ref": chat_ref,
+            "chat_ref": peer_ref(entity),
             "question": question,
             "options": options,
             "message": message_to_dict(message_obj) if message_obj else None,
@@ -78,7 +86,7 @@ def register(mcp) -> None:
         """Vote in a poll by option index."""
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
-        input_peer = await resolve_input_peer(client, chat_ref)
+        input_peer = await client.get_input_entity(entity)
         message = await client.get_messages(entity, ids=message_id)
         if not message or not getattr(message.media, "poll", None):
             raise RuntimeError("The target message is not a poll.")
@@ -98,7 +106,7 @@ def register(mcp) -> None:
         """Close an open poll."""
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
-        input_peer = await resolve_input_peer(client, chat_ref)
+        input_peer = await client.get_input_entity(entity)
         message = await client.get_messages(entity, ids=message_id)
         if not message or not getattr(message.media, "poll", None):
             raise RuntimeError("The target message is not a poll.")
@@ -131,7 +139,7 @@ def register(mcp) -> None:
         """Add a reaction to a message."""
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
-        input_peer = await resolve_input_peer(client, chat_ref)
+        input_peer = await client.get_input_entity(entity)
         await client(
             functions.messages.SendReactionRequest(
                 peer=input_peer,
@@ -148,7 +156,7 @@ def register(mcp) -> None:
         """Remove the account's reaction from a message."""
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
-        input_peer = await resolve_input_peer(client, chat_ref)
+        input_peer = await client.get_input_entity(entity)
         await client(
             functions.messages.SendReactionRequest(
                 peer=input_peer,
@@ -169,7 +177,7 @@ def register(mcp) -> None:
         """Save a draft for a chat."""
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
-        input_peer = await resolve_input_peer(client, chat_ref)
+        input_peer = await client.get_input_entity(entity)
         await client(
             functions.messages.SaveDraftRequest(
                 peer=input_peer,
@@ -186,7 +194,7 @@ def register(mcp) -> None:
         """Clear the draft for a chat."""
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
-        input_peer = await resolve_input_peer(client, chat_ref)
+        input_peer = await client.get_input_entity(entity)
         await client(functions.messages.SaveDraftRequest(peer=input_peer, message=""))
         return {"chat_ref": peer_ref(entity), "draft_cleared": True}
 
@@ -229,11 +237,18 @@ def register(mcp) -> None:
     ) -> dict:
         """Cancel scheduled messages by id, or all scheduled messages in a dialog."""
         require_destructive("cancel_scheduled", confirm)
+        if message_ids is not None and not message_ids:
+            raise ValueError(
+                "message_ids must not be empty. Omit it entirely to cancel "
+                "all scheduled messages in the dialog."
+            )
         client = await get_client()
         entity = await resolve_entity(client, chat_ref)
-        input_peer = await resolve_input_peer(client, chat_ref)
-        ids = message_ids or [message.id for message in await client.get_messages(entity, limit=100, scheduled=True)]
-        ids = coerce_message_ids(ids)
+        input_peer = await client.get_input_entity(entity)
+        if message_ids is None:
+            ids = [message.id for message in await client.get_messages(entity, limit=100, scheduled=True)]
+        else:
+            ids = coerce_message_ids(message_ids)
         if not ids:
             return {"chat_ref": peer_ref(entity), "cancelled_count": 0}
         await client(functions.messages.DeleteScheduledMessagesRequest(peer=input_peer, id=ids))

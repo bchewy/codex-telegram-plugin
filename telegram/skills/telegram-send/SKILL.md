@@ -1,6 +1,6 @@
 ---
 name: telegram-send
-description: Draft, refine, schedule, or send Telegram messages. Use when the user wants help replying, sending updates, forwarding messages, or scheduling future sends.
+description: Use when drafting, sending, replying, forwarding, or scheduling Telegram.
 ---
 
 1. Understand whether the user wants a draft, a scheduled message, or an immediate send.

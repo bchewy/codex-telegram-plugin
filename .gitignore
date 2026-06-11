@@ -12,6 +12,9 @@ build/
 .idea/
 .cursor/
 uv.lock
+.coverage
+coverage.xml
+coverage/
 
 # Local Telegram secrets and encrypted fallback state
 .env

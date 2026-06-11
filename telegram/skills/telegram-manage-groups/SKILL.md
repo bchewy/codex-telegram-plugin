@@ -1,6 +1,6 @@
 ---
 name: telegram-manage-groups
-description: Manage Telegram groups and channels. Use when the user wants to create chats, add/remove members, promote admins, update titles/about text, or inspect membership.
+description: Use when Telegram groups, channels, members, or admins are requested.
 ---
 
 1. Confirm whether the target is a basic group, supergroup, or channel because Telegram permissions differ.

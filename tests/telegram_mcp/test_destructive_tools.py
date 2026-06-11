@@ -33,6 +33,7 @@ def _tool_from(module, name: str):
         (groups, "delete_chat", {"chat_ref": "chat:1", "confirm": False}),
         (groups, "remove_member", {"chat_ref": "chat:1", "user_ref": "user:1", "confirm": False}),
         (groups, "demote_admin", {"chat_ref": "chat:1", "user_ref": "user:1", "confirm": False}),
+        (groups, "promote_admin", {"chat_ref": "chat:1", "user_ref": "user:1", "confirm": False}),
         (account, "logout", {"confirm": False}),
         (media, "set_profile_photo", {"file_path": "~/photo.jpg", "confirm": False}),
         (contacts, "delete_contact", {"user_refs": ["user:1"], "confirm": False}),

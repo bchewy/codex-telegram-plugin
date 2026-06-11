@@ -71,6 +71,7 @@ def register(mcp) -> None:
                     since_message_id=cursor,
                     max_messages=max_messages_per_batch,
                     takeout=use_takeout,
+                    tool_name="sync_chat_cache",
                 )
                 batch_count += 1
                 messages = batch["messages"]
@@ -101,6 +102,13 @@ def register(mcp) -> None:
                 cursor = batch["next_since_message_id"]
 
             state = get_chat_sync_state(connection, canonical_chat_ref)
+            if state is None:
+                # Empty chats yield no messages, but the sync still happened.
+                # Record it so auto-sync staleness checks and summarize_chat_history
+                # treat the chat as synced instead of retrying forever.
+                with connection:
+                    update_chat_sync_state(connection, canonical_chat_ref, 0)
+                state = get_chat_sync_state(connection, canonical_chat_ref)
             cached_count = connection.execute(
                 "SELECT COUNT(*) AS count FROM messages WHERE chat_ref = ?",
                 (canonical_chat_ref,),
@@ -146,6 +154,8 @@ def register(mcp) -> None:
             raise ValueError("offset must be >= 0")
         resolved_chat_ref = await _canonical_chat_ref(chat_ref) if chat_ref else None
         resolved_sender_ref = await _sender_ref(from_user)
+        auto_synced = False
+        auto_sync_truncated = False
         if resolved_chat_ref and auto_sync_seconds > 0:
             needs_sync = False
             sync_connection = connect_cache()
@@ -157,7 +167,14 @@ def register(mcp) -> None:
             finally:
                 sync_connection.close()
             if needs_sync:
-                await sync_chat_cache(chat_ref=resolved_chat_ref)
+                # Bound the inline sync to one batch so a stale chat freshens
+                # quickly without an unbounded backfill blocking the search.
+                sync_result = await sync_chat_cache(
+                    chat_ref=resolved_chat_ref,
+                    max_batches=1,
+                )
+                auto_synced = True
+                auto_sync_truncated = bool(sync_result.get("truncated"))
 
         connection = connect_cache()
         try:
@@ -186,6 +203,8 @@ def register(mcp) -> None:
                 "next_offset": offset + limit if has_more else None,
                 "has_more": has_more,
                 "compact": compact,
+                "auto_synced": auto_synced,
+                "auto_sync_truncated": auto_sync_truncated,
                 "messages": page,
             }
         finally:

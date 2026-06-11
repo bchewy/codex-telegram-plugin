@@ -1,6 +1,6 @@
 ---
 name: telegram-triage-unread
-description: Triage unread Telegram messages across dialogs. Use when the user wants a catch-up pass, unread digest, or priority-ranked list of what needs attention next.
+description: Use when priority-ranked unread Telegram digests are requested.
 ---
 
 1. Call `get_unread` without a `chat_ref` to gather unread messages across dialogs.

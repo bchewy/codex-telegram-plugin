@@ -8,7 +8,13 @@
         "TG_API_ID",
         "TG_API_HASH",
         "CODEX_TELEGRAM_SESSION",
-        "CODEX_TELEGRAM_MASTER_KEY"
+        "CODEX_TELEGRAM_MASTER_KEY",
+        "CODEX_TELEGRAM_ALLOW_DESTRUCTIVE",
+        "CODEX_TELEGRAM_CACHE_ENCRYPT",
+        "CODEX_TELEGRAM_UPLOAD_DIR",
+        "CODEX_TELEGRAM_CONFIG_DIR",
+        "CODEX_TELEGRAM_MEDIA_SCRIPTS_DIR",
+        "XDG_CACHE_HOME"
       ],
       "cwd": "./",
       "startup_timeout_sec": 20,

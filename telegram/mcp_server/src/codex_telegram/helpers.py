@@ -10,7 +10,7 @@ from telethon.tl.custom.dialog import Dialog
 from telethon.tl.custom.draft import Draft
 from telethon.tl.custom.message import Message
 
-from .client import list_all_dialogs
+from .client import invalidate_dialog_cache, list_all_dialogs
 
 
 def utc_now() -> datetime:
@@ -121,8 +121,14 @@ def resolve_upload_path(file_path: str, *, allow_arbitrary_path: bool) -> tuple[
     except ValueError:
         rel = None
 
-    if rel and any(str(rel).startswith(prefix) for prefix in HARD_DENY_PREFIXES):
-        raise PermissionError(f"refusing to read sensitive path: {target}")
+    if rel is not None:
+        # Match whole path components so `.ssh/key` is denied but a sibling
+        # like `.ssh-backup/` is not.
+        rel_parts = rel.parts
+        for prefix in HARD_DENY_PREFIXES:
+            prefix_parts = tuple(prefix.split("/"))
+            if rel_parts[: len(prefix_parts)] == prefix_parts:
+                raise PermissionError(f"refusing to read sensitive path: {target}")
 
     sandbox_raw = os.getenv(UPLOAD_DIR_ENV)
     sandbox = Path(sandbox_raw).expanduser().resolve() if sandbox_raw else DEFAULT_UPLOAD_DIR.resolve()
@@ -280,6 +286,11 @@ async def _resolve_entity_direct(client: TelegramClient, ref: str | int | Any) -
     if candidate in {"me", "self", "saved", "saved_messages"}:
         return await client.get_entity("me")
 
+    # Telethon interprets bare numeric strings as phone numbers; an id-shaped
+    # string like "12345" must resolve as an entity id instead.
+    if candidate.lstrip("-").isdigit():
+        return await client.get_entity(int(candidate))
+
     kind, sep, raw_id = candidate.partition(":")
     if sep and raw_id.lstrip("-").isdigit():
         peer = {
@@ -302,6 +313,10 @@ async def resolve_entity(client: TelegramClient, ref: str | int | Any) -> Any:
     except ValueError as exc:
         if _looks_like_numeric_ref(ref):
             try:
+                # Force a real dialog fetch: a warm memoized list would skip
+                # the network call that populates Telethon's entity cache,
+                # which is the whole point of this retry.
+                invalidate_dialog_cache(client)
                 await list_all_dialogs(client)
                 return await _resolve_entity_direct(client, ref)
             except (errors.UsernameInvalidError, errors.UsernameNotOccupiedError, ValueError):
@@ -318,6 +333,11 @@ async def resolve_entity_fuzzy(client: TelegramClient, ref: str | int | Any) -> 
             raise
 
         candidate = ref.strip()
+        if not candidate:
+            # An empty needle would substring-match every dialog title and
+            # silently "resolve" to whichever dialog happens to be first.
+            raise
+
         dialogs = await list_all_dialogs(client)
         lowered = candidate.casefold()
         exact = next(
@@ -342,12 +362,18 @@ async def resolve_input_peer(client: TelegramClient, ref: str | int | Any) -> An
 
 async def resolve_input_user(client: TelegramClient, ref: str | int | Any) -> Any:
     entity = await resolve_entity(client, ref)
-    return tg_utils.get_input_user(entity)
+    try:
+        return tg_utils.get_input_user(entity)
+    except TypeError as exc:
+        raise ValueError(f"{ref} is not a user reference") from exc
 
 
 async def resolve_input_channel(client: TelegramClient, ref: str | int | Any) -> Any:
     entity = await resolve_entity(client, ref)
-    return tg_utils.get_input_channel(entity)
+    try:
+        return tg_utils.get_input_channel(entity)
+    except TypeError as exc:
+        raise ValueError(f"{ref} is not a channel reference") from exc
 
 
 def get_chat_id(entity: Any) -> int:

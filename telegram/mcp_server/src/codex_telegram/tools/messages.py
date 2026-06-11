@@ -28,8 +28,12 @@ from ..helpers import (
 )
 from ..safety import require_destructive
 
-_ONE_MICROSECOND = timedelta(microseconds=1)
+# Telegram serializes date offsets at one-second granularity, so sub-second
+# padding truncates to a no-op on the wire. Pad a full second past the bound
+# and rely on `_within_range` to enforce the exact datetime client-side.
+_DATE_BOUNDARY_PAD = timedelta(seconds=1)
 GET_UNREAD_CONCURRENCY = 4
+GLOBAL_SEARCH_PAGE_SIZE = 100
 
 
 def _within_range(message, min_date, max_date) -> bool:
@@ -107,7 +111,7 @@ async def _search_messages_window(
     upper = parse_datetime(max_date)
     _validate_date_window(lower, upper)
 
-    offset_date = upper + _ONE_MICROSECOND if upper else None
+    offset_date = upper + _DATE_BOUNDARY_PAD if upper else None
     collected = []
     scanned_count = 0
     stopped_at_lower_bound = False
@@ -173,9 +177,12 @@ def _message_offset_peer_ref(message) -> str | None:
     return None
 
 
-def _global_search_offset_rate(response, message) -> int:
+def _global_search_offset_rate(response, message, *, is_last_in_page: bool = True) -> int:
+    # `next_rate` describes the position after the END of the returned page.
+    # A cursor that points at a mid-page message must fall back to that
+    # message's own date, or resuming would skip the rest of the page.
     next_rate = getattr(response, "next_rate", None)
-    if next_rate is not None:
+    if is_last_in_page and next_rate is not None:
         return next_rate
 
     message_date = getattr(message, "date", None)
@@ -224,7 +231,7 @@ async def _search_global_messages_window(
     )
     current_offset_id = offset_id
     current_offset_rate = offset_rate
-    request_max_date = upper + _ONE_MICROSECOND if upper else None
+    request_max_date = upper + _DATE_BOUNDARY_PAD if upper else None
 
     collected = []
     scanned_count = 0
@@ -235,6 +242,7 @@ async def _search_global_messages_window(
     next_offset: dict | None = None
 
     while scanned_count < scan_limit and len(collected) < target_count:
+        page_limit = min(GLOBAL_SEARCH_PAGE_SIZE, scan_limit - scanned_count)
         response = await client(
             functions.messages.SearchGlobalRequest(
                 q=query,
@@ -244,7 +252,7 @@ async def _search_global_messages_window(
                 offset_rate=current_offset_rate,
                 offset_peer=current_offset_peer,
                 offset_id=current_offset_id,
-                limit=1,
+                limit=page_limit,
             )
         )
         raw_messages = getattr(response, "messages", [])
@@ -266,7 +274,9 @@ async def _search_global_messages_window(
             advanced = True
             current_offset_id = message.id
             current_offset_peer = getattr(message, "input_chat", None) or types.InputPeerEmpty()
-            current_offset_rate = _global_search_offset_rate(response, message)
+            current_offset_rate = _global_search_offset_rate(
+                response, message, is_last_in_page=message is raw_messages[-1]
+            )
             last_scanned_offset = {
                 "date": to_iso(message.date),
                 "id": message.id,
@@ -314,21 +324,28 @@ def _iter_message_id_chunks(start_id: int, end_id: int, *, chunk_size: int = 100
         current = stop + 1
 
 
-async def _fetch_message_chunk(client, entity, ids: list[int], semaphore: asyncio.Semaphore):
+async def _fetch_message_chunk(
+    client,
+    entity,
+    ids: list[int],
+    semaphore: asyncio.Semaphore,
+    *,
+    tool_name: str = "bulk_fetch_history",
+):
     async with semaphore:
-        attempts = 0
-        while True:
-            try:
-                return _as_message_list(await client.get_messages(entity, ids=ids))
-            except errors.FloodWaitError as exc:
-                attempts += 1
-                if attempts > 1:
-                    raise TelegramFloodWaitError(
-                        seconds=exc.seconds,
-                        tool_name="bulk_fetch_history",
-                        attempts=attempts,
-                    ) from exc
-                await asyncio.sleep(exc.seconds)
+        try:
+            return _as_message_list(await client.get_messages(entity, ids=ids))
+        except errors.FloodWaitError as exc:
+            # Telethon already auto-sleeps floods <= its flood_sleep_threshold
+            # (60s by default), so any error that propagates here demands a
+            # longer wait than the MCP tool timeout allows. Sleeping would
+            # just stall the shared client until the call is killed; surface
+            # the structured error so the caller can retry after the window.
+            raise TelegramFloodWaitError(
+                seconds=exc.seconds,
+                tool_name=tool_name,
+                attempts=1,
+            ) from exc
 
 
 async def _fetch_bulk_history_bootstrap(
@@ -428,6 +445,7 @@ async def fetch_bulk_history_payload(
     include_empty: bool = False,
     takeout: bool = False,
     takeout_kwargs: dict | None = None,
+    tool_name: str = "bulk_fetch_history",
 ) -> dict:
     if since_message_id < 0:
         raise ValueError("since_message_id must be >= 0")
@@ -509,7 +527,9 @@ async def fetch_bulk_history_payload(
 
             batch_results = await asyncio.gather(
                 *[
-                    _fetch_message_chunk(history_client, entity, ids, semaphore)
+                    _fetch_message_chunk(
+                        history_client, entity, ids, semaphore, tool_name=tool_name
+                    )
                     for ids in batch_chunks
                 ]
             )
@@ -583,17 +603,22 @@ def register(mcp) -> None:
         from_user: str | None = None,
     ) -> dict:
         """Fetch message history from one Telegram chat."""
+        if limit <= 0:
+            raise ValueError("limit must be > 0")
         client = await get_client()
         entity = await resolve_entity_fuzzy(client, chat_ref)
         sender = await resolve_entity_fuzzy(client, from_user) if from_user else None
         lower = parse_datetime(min_date)
         upper = parse_datetime(max_date)
         _validate_date_window(lower, upper)
+        # Collect one extra message so `has_more` reflects whether the page
+        # was truncated rather than the window simply running out.
+        target_count = limit + 1
         filtered = []
         if lower:
             async for message in client.iter_messages(
                 entity,
-                offset_date=lower - _ONE_MICROSECOND,
+                offset_date=lower - _DATE_BOUNDARY_PAD,
                 reverse=True,
                 from_user=sender,
             ):
@@ -602,11 +627,11 @@ def register(mcp) -> None:
                 if not _within_range(message, lower, upper):
                     continue
                 filtered.append(message)
-                if len(filtered) >= limit:
+                if len(filtered) >= target_count:
                     break
         else:
             offset_id = 0
-            offset_date = upper + _ONE_MICROSECOND if upper else None
+            offset_date = upper + _DATE_BOUNDARY_PAD if upper else None
             page_size = max(limit * 3, limit)
             for _ in range(10):
                 batch = [
@@ -625,10 +650,10 @@ def register(mcp) -> None:
                 for message in batch:
                     if _within_range(message, lower, upper):
                         filtered.append(message)
-                        if len(filtered) >= limit:
+                        if len(filtered) >= target_count:
                             break
 
-                if len(filtered) >= limit:
+                if len(filtered) >= target_count:
                     break
 
                 next_offset = batch[-1].id
@@ -637,7 +662,13 @@ def register(mcp) -> None:
                 offset_id = next_offset
                 offset_date = None
 
-        return {"chat_ref": peer_ref(entity), "count": len(filtered[:limit]), "messages": iter_message_dicts(filtered[:limit])}
+        page = filtered[:limit]
+        return {
+            "chat_ref": peer_ref(entity),
+            "count": len(page),
+            "has_more": len(filtered) > limit,
+            "messages": iter_message_dicts(page),
+        }
 
     @mcp.tool()
     @with_flood_wait
@@ -679,12 +710,23 @@ def register(mcp) -> None:
             if dialog is None:
                 raise RuntimeError(f"Could not find dialog metadata for {chat_ref}.")
             read_max = getattr(getattr(dialog, "dialog", None), "read_inbox_max_id", 0)
-            messages = await client.get_messages(entity, limit=limit, min_id=read_max)
-            unread = [message for message in messages if not message.out]
+            # Filter outgoing messages while iterating instead of after a
+            # limited fetch, otherwise own replies crowd unread ones out of
+            # the page.
+            unread = []
+            scan_cap = max(limit * 3, limit + 50)
+            async for message in client.iter_messages(
+                entity, min_id=read_max, limit=scan_cap
+            ):
+                if message.out:
+                    continue
+                unread.append(message)
+                if len(unread) >= limit:
+                    break
             return {
                 "chat_ref": peer_ref(entity),
                 "unread_count": dialog.unread_count,
-                "messages": iter_message_dicts(unread[:limit]),
+                "messages": iter_message_dicts(unread),
             }
 
         dialogs = await list_all_dialogs(client)
@@ -891,6 +933,16 @@ def register(mcp) -> None:
 
     @mcp.tool()
     @with_flood_wait
+    async def end_takeout_session(success: bool = True) -> dict:
+        """Finish the active Telegram takeout session, if any."""
+        client = await get_client()
+        if client.session.takeout_id is None:
+            return {"ok": True, "ended": False, "reason": "no active takeout session"}
+        ended = await client.end_takeout(success=success)
+        return {"ok": bool(ended), "ended": bool(ended), "success": success}
+
+    @mcp.tool()
+    @with_flood_wait
     async def bulk_fetch_history(
         chat_ref: str,
         since_message_id: int = 0,
@@ -991,7 +1043,15 @@ def register(mcp) -> None:
         entity = await resolve_entity(client, chat_ref)
         ids = coerce_message_ids(message_ids)
         result = await client.delete_messages(entity, ids, revoke=revoke)
-        return {"chat_ref": peer_ref(entity), "message_ids": ids, "deleted_count": len(result)}
+        # delete_messages returns one AffectedMessages per 100-id batch;
+        # pts_count carries the number of messages actually deleted.
+        deleted_count = sum(getattr(item, "pts_count", 0) for item in result)
+        return {
+            "chat_ref": peer_ref(entity),
+            "message_ids": ids,
+            "requested_count": len(ids),
+            "deleted_count": deleted_count,
+        }
 
     @mcp.tool()
     @with_flood_wait
@@ -1014,11 +1074,16 @@ def register(mcp) -> None:
             silent=silent,
             schedule=parse_datetime(schedule_at),
         )
+        # Telethon returns None entries for messages it could not forward
+        # (deleted source messages, protected content, ...).
+        sent = [message for message in _as_message_list(forwarded) if not _is_empty_message(message)]
         return {
             "from_chat_ref": peer_ref(source),
             "to_chat_ref": peer_ref(target),
-            "count": len(forwarded),
-            "messages": iter_message_dicts(forwarded),
+            "requested_count": len(ids),
+            "count": len(sent),
+            "skipped_count": len(ids) - len(sent),
+            "messages": iter_message_dicts(sent),
         }
 
     @mcp.tool()
