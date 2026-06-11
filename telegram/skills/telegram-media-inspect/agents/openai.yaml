@@ -1,5 +1,2 @@
-interface:
-  display_name: Telegram Media Inspect
-  short_description: Inspect Telegram voice notes, videos, and other media.
 policy:
   allow_implicit_invocation: false
