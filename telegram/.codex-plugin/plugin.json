@@ -5,8 +5,8 @@
   "author": {
     "name": "Brian Chew"
   },
-  "homepage": "https://github.com/bchewy/codex-telegram-plugin",
-  "repository": "https://github.com/bchewy/codex-telegram-plugin",
+  "homepage": "https://github.com/bchewy/telegram-agent-plugin",
+  "repository": "https://github.com/bchewy/telegram-agent-plugin",
   "license": "MIT",
   "keywords": ["telegram", "mcp", "messaging"],
   "skills": "./skills/",
@@ -18,9 +18,9 @@
     "developerName": "Brian Chew",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],
-    "websiteURL": "https://github.com/bchewy/codex-telegram-plugin",
-    "privacyPolicyURL": "https://github.com/bchewy/codex-telegram-plugin/blob/main/telegram/docs/privacy.md",
-    "termsOfServiceURL": "https://github.com/bchewy/codex-telegram-plugin/blob/main/telegram/docs/terms.md",
+    "websiteURL": "https://github.com/bchewy/telegram-agent-plugin",
+    "privacyPolicyURL": "https://github.com/bchewy/telegram-agent-plugin/blob/main/telegram/docs/privacy.md",
+    "termsOfServiceURL": "https://github.com/bchewy/telegram-agent-plugin/blob/main/telegram/docs/terms.md",
     "defaultPrompt": [
       "Summarize unread Telegram",
       "Search cached Telegram",

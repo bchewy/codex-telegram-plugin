@@ -1,4 +1,4 @@
-# Codex Telegram Plugin
+# Telegram Agent Plugin
 
 Use your personal Telegram account inside Codex.
 
@@ -103,7 +103,7 @@ Preserve any other plugins already present in your local marketplace file.
       "name": "telegram",
       "source": {
         "source": "local",
-        "path": "./dev/codex-telegram-plugin/telegram"
+        "path": "./dev/telegram-agent-plugin/telegram"
       },
       "policy": {
         "installation": "AVAILABLE",
@@ -188,10 +188,10 @@ This is the exact flow:
 2. Enter the Telegram login code
 3. Open `API development tools`
 4. Fill the form with something sane, for example:
-  - `App title`: `Codex Telegram Plugin`
+  - `App title`: `Telegram Agent Plugin`
   - `Short name`: `codextelegramplugin`
   - `Platform`: `Desktop`
-  - `URL`: `https://github.com/bchewy/codex-telegram-plugin`
+  - `URL`: `https://github.com/bchewy/telegram-agent-plugin`
   - `Description`: `Personal Telegram MCP for Codex`
 5. Submit
 6. Copy:
