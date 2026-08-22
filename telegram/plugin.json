@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "telegram",
+  "version": "0.1.0",
+  "description": "Personal Telegram account tools: summarize, search, send, and manage chats over MCP, with a local message cache for repeat search and aggregates.",
+  "author": {
+    "name": "Brian Chew"
+  },
+  "homepage": "https://github.com/bchewy/codex-telegram-plugin",
+  "repository": "https://github.com/bchewy/codex-telegram-plugin",
+  "license": "MIT",
+  "keywords": ["telegram", "mcp", "messaging"]
+}

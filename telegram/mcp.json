@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "telegram_personal": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "run",
+        "--project",
+        "${PLUGIN_ROOT}/mcp_server",
+        "codex-telegram",
+        "serve"
+      ],
+      "env": {
+        "UV_PROJECT_ENVIRONMENT": "${PLUGIN_DATA}/uv-env"
+      },
+      "cwd": "${PLUGIN_ROOT}"
+    }
+  }
+}
