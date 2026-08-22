@@ -11,6 +11,7 @@ from telethon import TelegramClient, errors, functions
 from telethon.sessions import StringSession
 
 from . import __version__
+from .proxy import mtproxy_client_kwargs
 from .session_store import MissingSessionError, load_session
 
 P = ParamSpec("P")
@@ -90,6 +91,7 @@ def _build_client(session_string: str, api_id: int, api_hash: str) -> TelegramCl
         app_version=__version__,
         lang_code="en",
         system_lang_code="en",
+        **mtproxy_client_kwargs(),
     )
 
 

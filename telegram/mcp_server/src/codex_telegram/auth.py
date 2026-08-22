@@ -9,6 +9,7 @@ from telethon.sessions import StringSession
 from . import __version__
 from .helpers import utc_now
 from .models import StoredSession
+from .proxy import mtproxy_client_kwargs
 from .session_store import SessionStoreError, load_session, save_session
 
 
@@ -34,6 +35,7 @@ def _build_client(session: StringSession, api_id: int, api_hash: str) -> Telegra
         app_version=__version__,
         lang_code="en",
         system_lang_code="en",
+        **mtproxy_client_kwargs(),
     )
 
 
