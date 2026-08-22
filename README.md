@@ -26,6 +26,48 @@ If you just want the shortest path, do this:
 
 The exact commands are below.
 
+## Plugin package layout: Codex + Agent Plugins
+
+The installable package is the `telegram/` directory. It ships two manifest
+sets side by side, so the same directory loads in Codex and in any client that
+implements the portable [Agent Plugins 1.0.0](https://agent-plugins.org/specification)
+format:
+
+| File | Consumer | Purpose |
+| --- | --- | --- |
+| `plugin.json` | Agent Plugins clients | Portable manifest (`$schema` = `https://agent-plugins.org/schemas/1.0.0/plugin.schema.json`, closed field set) |
+| `mcp.json` | Agent Plugins clients | Portable MCP config (`stdio` server launched via `uv`, `${PLUGIN_ROOT}`/`${PLUGIN_DATA}` placeholders) |
+| `skills/<name>/SKILL.md` | Both | Agent Skills, discovered as immediate children of `skills/` by both formats |
+| `.codex-plugin/plugin.json` | Codex | Codex-native manifest, including marketplace `interface` metadata (display name, logo, screenshots, prompts) |
+| `.mcp.json` | Codex | Codex-native MCP config, including Codex-only fields (`env_vars` passthrough allowlist, `startup_timeout_sec`, `tool_timeout_sec`) |
+
+Notes on the split:
+
+- Codex does not currently document an Agent Plugins `extensions` namespace,
+  so its UI/marketplace metadata stays in `.codex-plugin/plugin.json` instead
+  of being duplicated under an invented `extensions` key. If Codex publishes a
+  reverse-domain namespace later, that metadata can move into the portable
+  manifest's `extensions` field.
+- The portable `mcp.json` declares no secret values. Telegram credentials come
+  from the login wizard (keyring / encrypted session file), not from the
+  package. The `TG_API_ID`-style environment overrides listed below reach the
+  server through Codex's `env_vars` passthrough; other clients control their
+  own base subprocess environment, and the server works without them once you
+  have logged in.
+- The portable config sets `UV_PROJECT_ENVIRONMENT=${PLUGIN_DATA}/uv-env` so
+  `uv` builds the virtualenv in the client-managed writable data directory
+  instead of inside the (possibly read-only) installed package.
+- Shared metadata (`name`, `version`, `author`, `license`, ...) must stay
+  identical across `plugin.json` and `.codex-plugin/plugin.json`, and the two
+  MCP configs must launch the same server command. The test suite enforces
+  this (`tests/telegram_mcp/test_plugin_structure.py`), and also validates the
+  portable files against the vendored Agent Plugins 1.0.0 schemas.
+
+An Agent Plugins client loads the package by reading root `plugin.json`,
+discovering skills under `skills/`, and starting `telegram_personal` from root
+`mcp.json`. Codex keeps using `.codex-plugin/plugin.json` and `.mcp.json`
+exactly as before; nothing about the Codex install flow changed.
+
 ## Codex marketplace model
 
 A Codex marketplace is a catalog of plugins. Its `interface.displayName` is the
@@ -411,9 +453,14 @@ If you would not paste the content into a Codex prompt directly, do not summariz
 ## Repo layout
 
 - `telegram/`: the plugin bundle (single source of truth)
+  - `plugin.json`: portable Agent Plugins 1.0.0 manifest
+  - `mcp.json`: portable Agent Plugins 1.0.0 MCP server declaration
   - `mcp_server/`: Python package and MCP server
-  - `skills/`: skill files loaded by the plugin
-  - `assets/`: icon, logo, screenshots referenced by the manifest
-  - `.codex-plugin/plugin.json`: plugin manifest
-  - `.mcp.json`: bundled MCP server declaration
+  - `skills/`: skill files loaded by the plugin (both formats discover `skills/<name>/SKILL.md`)
+  - `assets/`: icon, logo, screenshots referenced by the Codex manifest
+  - `.codex-plugin/plugin.json`: Codex-native plugin manifest (marketplace `interface` metadata lives here)
+  - `.mcp.json`: Codex-native MCP server declaration (Codex-only `env_vars`/timeout fields live here)
+- `tests/telegram_mcp/`: server tests plus `test_plugin_structure.py`, which
+  validates the portable manifests against the vendored Agent Plugins schemas
+  and keeps the Codex and portable files in sync
 - Local marketplace registration lives outside this repo in `~/.agents/plugins/marketplace.json`
