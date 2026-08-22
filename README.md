@@ -1,8 +1,13 @@
 # Telegram Agent Plugin
 
-Use your personal Telegram account inside Codex.
+Use your personal Telegram account from your coding agent. The same bundle
+works in three kinds of clients:
 
-This plugin lets Codex:
+- **Codex** — installed as a plugin from a local marketplace
+- **Grok Bot / Cursor (custom MCP)** — registered as a plain local stdio MCP server
+- **Any Agent Plugins 1.0.0 client** — loaded from the portable `plugin.json` + `mcp.json`
+
+This plugin lets your agent:
 
 - summarize chats
 - search recent messages live, or search cached chat history for repeat/broad/old lookups
@@ -17,58 +22,88 @@ This plugin lets Codex:
 
 ## Fast setup
 
-If you just want the shortest path, do this:
+If you just want the shortest path:
 
-1. Install the plugin into Codex
-2. Create Telegram API credentials at `my.telegram.org/apps`
-3. Run the login wizard once
-4. Start a fresh Codex thread and use `@Telegram`
+1. Create Telegram API credentials at `my.telegram.org/apps`
+2. Run the login wizard once (`codex-telegram login`)
+3. Hook the server into your client:
+   - **Codex**: install the plugin from your local marketplace, then use `@Telegram` in a fresh thread
+   - **Grok Bot / Cursor**: add a custom stdio MCP server that runs `uv run --project <repo>/telegram/mcp_server codex-telegram serve`
 
-The exact commands are below.
+The exact commands are below. The Python CLI is still named `codex-telegram`
+for historical reasons; it is the same server regardless of which client
+launches it.
 
-## Plugin package layout: Codex + Agent Plugins
+## Requirements
 
-The installable package is the `telegram/` directory. It ships two manifest
-sets side by side, so the same directory loads in Codex and in any client that
-implements the portable [Agent Plugins 1.0.0](https://agent-plugins.org/specification)
-format:
+- Python 3.11+
+- `uv`
+- a real Telegram user account
+- your own Telegram `api_id` and `api_hash`
+- for the Codex path: Codex CLI / Codex app
+- for the Grok Bot / Cursor path: any client that can register a local stdio MCP server
 
-| File | Consumer | Purpose |
-| --- | --- | --- |
-| `plugin.json` | Agent Plugins clients | Portable manifest (`$schema` = `https://agent-plugins.org/schemas/1.0.0/plugin.schema.json`, closed field set) |
-| `mcp.json` | Agent Plugins clients | Portable MCP config (`stdio` server launched via `uv`, `${PLUGIN_ROOT}`/`${PLUGIN_DATA}` placeholders) |
-| `skills/<name>/SKILL.md` | Both | Agent Skills, discovered as immediate children of `skills/` by both formats |
-| `.codex-plugin/plugin.json` | Codex | Codex-native manifest, including marketplace `interface` metadata (display name, logo, screenshots, prompts) |
-| `.mcp.json` | Codex | Codex-native MCP config, including Codex-only fields (`env_vars` passthrough allowlist, `startup_timeout_sec`, `tool_timeout_sec`) |
+## Step 1: Create Telegram API credentials
 
-Notes on the split:
+Go to [https://my.telegram.org/apps](https://my.telegram.org/apps)
 
-- Codex does not currently document an Agent Plugins `extensions` namespace,
-  so its UI/marketplace metadata stays in `.codex-plugin/plugin.json` instead
-  of being duplicated under an invented `extensions` key. If Codex publishes a
-  reverse-domain namespace later, that metadata can move into the portable
-  manifest's `extensions` field.
-- The portable `mcp.json` declares no secret values. Telegram credentials come
-  from the login wizard (keyring / encrypted session file), not from the
-  package. The `TG_API_ID`-style environment overrides listed below reach the
-  server through Codex's `env_vars` passthrough; other clients control their
-  own base subprocess environment, and the server works without them once you
-  have logged in.
-- The portable config sets `UV_PROJECT_ENVIRONMENT=${PLUGIN_DATA}/uv-env` so
-  `uv` builds the virtualenv in the client-managed writable data directory
-  instead of inside the (possibly read-only) installed package.
-- Shared metadata (`name`, `version`, `author`, `license`, ...) must stay
-  identical across `plugin.json` and `.codex-plugin/plugin.json`, and the two
-  MCP configs must launch the same server command. The test suite enforces
-  this (`tests/telegram_mcp/test_plugin_structure.py`), and also validates the
-  portable files against the vendored Agent Plugins 1.0.0 schemas.
+This is the exact flow:
 
-An Agent Plugins client loads the package by reading root `plugin.json`,
-discovering skills under `skills/`, and starting `telegram_personal` from root
-`mcp.json`. Codex keeps using `.codex-plugin/plugin.json` and `.mcp.json`
-exactly as before; nothing about the Codex install flow changed.
+1. Log in with your phone number
+2. Enter the Telegram login code
+3. Open `API development tools`
+4. Fill the form with something sane, for example:
+  - `App title`: `Telegram Agent Plugin`
+  - `Short name`: `codextelegramplugin`
+  - `Platform`: `Desktop`
+  - `URL`: `https://github.com/bchewy/telegram-agent-plugin`
+  - `Description`: `Personal Telegram MCP`
+5. Submit
+6. Copy:
+  - `api_id`
+  - `api_hash`
 
-## Codex marketplace model
+Important:
+
+- this is **not** BotFather
+- you want `my.telegram.org/apps`
+- the plugin expects **your** API credentials, not a shared developer key
+
+## Step 2: Log in once
+
+This plugin uses Telegram user-account MTProto auth, not the Bot API. Login is
+a one-time CLI step; after it succeeds, the session is stored locally (keyring
+or encrypted file) and the MCP server does **not** need `api_id`/`api_hash` in
+its environment.
+
+From a repo checkout:
+
+```bash
+uv run --project ./telegram/mcp_server codex-telegram login
+```
+
+You will be prompted for:
+
+1. `Telegram API ID`
+2. `Telegram API hash`
+3. phone number in E.164 format
+4. the Telegram login code
+5. 2FA password, if your account uses it
+
+Successful output looks like:
+
+```text
+{'ok': True, 'storage': 'keyring', 'user_id': 123, 'username': 'yourname', 'display_name': 'Your Name', 'phone': '+15555555555'}
+```
+
+If you already installed the plugin into Codex and want to authenticate the
+installed bundle instead of a checkout, see the Codex section below.
+
+---
+
+## Using with Codex
+
+### Codex marketplace model
 
 A Codex marketplace is a catalog of plugins. Its `interface.displayName` is the
 dropdown label in Codex, while this plugin's `interface.displayName` is the
@@ -127,15 +162,7 @@ Preserve any other plugins already present in your local marketplace file.
 }
 ```
 
-## Requirements
-
-- Codex CLI / Codex app
-- Python 3.11+
-- `uv`
-- a real Telegram user account
-- your own Telegram `api_id` and `api_hash`
-
-## Step 1: Install the plugin in Codex
+### Install the plugin in Codex
 
 This repo is designed to be installed from the shared local marketplace instead
 of registering itself as a separate marketplace.
@@ -155,7 +182,7 @@ want it grouped with your other local plugins.
 Open a fresh Codex session after installing. Old threads can miss newly
 installed plugin, skill, and MCP context.
 
-## Step 2: Verify the plugin is installed
+### Verify the plugin is installed
 
 In Codex:
 
@@ -178,47 +205,10 @@ You should see:
 
 Important: start a **fresh thread** after installing. Old threads can miss newly installed plugin/skill context.
 
-## Step 3: Create Telegram API credentials
+### Authenticate the installed bundle
 
-Go to [https://my.telegram.org/apps](https://my.telegram.org/apps)
-
-This is the exact flow:
-
-1. Log in with your phone number
-2. Enter the Telegram login code
-3. Open `API development tools`
-4. Fill the form with something sane, for example:
-  - `App title`: `Telegram Agent Plugin`
-  - `Short name`: `codextelegramplugin`
-  - `Platform`: `Desktop`
-  - `URL`: `https://github.com/bchewy/telegram-agent-plugin`
-  - `Description`: `Personal Telegram MCP for Codex`
-5. Submit
-6. Copy:
-  - `api_id`
-  - `api_hash`
-
-Important:
-
-- this is **not** BotFather
-- you want `my.telegram.org/apps`
-- the plugin expects **your** API credentials, not a shared developer key
-
-## Step 4: Log in once
-
-This plugin uses Telegram user-account MTProto auth, not the Bot API.
-
-### If you are inside a repo checkout
-
-Run:
-
-```bash
-uv run --project ./telegram/mcp_server codex-telegram login
-```
-
-### If you already installed the plugin into Codex and just want to authenticate the installed bundle
-
-Run this exact command:
+If you skipped the checkout login in Step 2 and want to log in against the
+bundle Codex installed, run this exact command:
 
 ```bash
 uv run --project "$(
@@ -236,21 +226,7 @@ PY
 )" codex-telegram login
 ```
 
-You will be prompted for:
-
-1. `Telegram API ID`
-2. `Telegram API hash`
-3. phone number in E.164 format
-4. the Telegram login code
-5. 2FA password, if your account uses it
-
-Successful output looks like:
-
-```text
-{'ok': True, 'storage': 'keyring', 'user_id': 123, 'username': 'yourname', 'display_name': 'Your Name', 'phone': '+15555555555'}
-```
-
-## Step 5: Test it in Codex
+### Test it in Codex
 
 Start a fresh Codex thread and try one of these:
 
@@ -292,6 +268,165 @@ $telegram:telegram-aggregate show cached weekly message volume for the Design ch
 $telegram:telegram-send draft a reply to the latest message in Saved Messages
 ```
 
+### Bundled skills
+
+Codex registers the skills under the plugin namespace:
+
+- `telegram:telegram-login`
+- `telegram:telegram-summarize`
+- `telegram:telegram-triage-unread`
+- `telegram:telegram-search`
+- `telegram:telegram-aggregate`
+- `telegram:telegram-media-inspect`
+- `telegram:telegram-send`
+- `telegram:telegram-manage-groups`
+
+---
+
+## Using with Grok Bot / Cursor (custom MCP, stdio)
+
+The bundled server is a normal local stdio MCP server, so any client that
+supports custom MCP servers (Grok Bot, Cursor, Claude Desktop, etc.) can use it
+directly — no Codex plugin machinery required.
+
+### 1. Clone the repo and sync the server
+
+```bash
+git clone https://github.com/bchewy/telegram-agent-plugin.git
+cd telegram-agent-plugin
+uv sync --project ./telegram/mcp_server
+```
+
+### 2. Log in once
+
+```bash
+uv run --project ./telegram/mcp_server codex-telegram login
+```
+
+Same wizard as Step 2 above: API ID and hash from `my.telegram.org/apps`,
+phone number, login code, 2FA password if set. The session lands in the OS
+keyring or in `~/.config/codex-telegram/session.enc`.
+
+### 3. Register the custom MCP server
+
+Add a local **stdio** MCP server in your client with:
+
+- **command**: `uv`
+- **args**: `run --project /absolute/path/to/telegram-agent-plugin/telegram/mcp_server codex-telegram serve`
+- **env** (optional):
+  - `CODEX_TELEGRAM_MASTER_KEY` — only if your session is stored in the
+    encrypted file (no OS keyring) and the key is not otherwise available to
+    the server process
+  - `TELEGRAM_MTPROXY_HOST` / `TELEGRAM_MTPROXY_PORT` / `TELEGRAM_MTPROXY_SECRET`
+    — only on networks that block direct Telegram MTProto (see troubleshooting)
+
+Telegram API credentials (`TG_API_ID` / `TG_API_HASH`) are **not** required in
+the MCP env after login; the stored session already carries them.
+
+In JSON-config clients (for example Cursor's `mcp.json`), the equivalent entry
+looks like:
+
+```json
+{
+  "mcpServers": {
+    "telegram_personal": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--project",
+        "/absolute/path/to/telegram-agent-plugin/telegram/mcp_server",
+        "codex-telegram",
+        "serve"
+      ]
+    }
+  }
+}
+```
+
+Use an absolute path for `--project`. Custom MCP servers are often spawned
+with an unrelated working directory, so relative paths break.
+
+### 4. Verify
+
+From the shell:
+
+```bash
+uv run --project ./telegram/mcp_server codex-telegram whoami
+```
+
+From the agent, in a fresh conversation, ask it to call the `get_me` tool (or
+`telegram_diagnostics` for a fuller runtime/auth/cache report). You should see
+your own account's user id, username, and display name.
+
+### Troubleshooting custom MCP setups
+
+- **Tools error with "no session found"**: the server subprocess cannot see
+  the session that `login` stored. Make sure the client runs the server as the
+  same OS user that ran `login`. If the session went to the encrypted file
+  instead of the keyring, set `CODEX_TELEGRAM_MASTER_KEY` in the server's env
+  (and `CODEX_TELEGRAM_CONFIG_DIR` too, if you overrode it during login).
+- **Server registered but tools don't show up**: start a fresh thread /
+  conversation after adding the MCP server. Most clients only load new servers
+  into new sessions.
+- **Connection hangs or times out on restricted networks**: some hosted or
+  sandboxed environments block direct Telegram MTProto connections (Telegram's
+  data centers are raw-TCP endpoints, not HTTPS). In that case Telethon needs a
+  proxy path. This server supports an MTProxy configured entirely via env vars:
+  set `TELEGRAM_MTPROXY_HOST`, `TELEGRAM_MTPROXY_PORT`, and
+  `TELEGRAM_MTPROXY_SECRET` together (on both the `login` command and the MCP
+  server env). Treat the proxy secret like a credential: pass it through your
+  client's env configuration, never commit it. For SOCKS or other proxy types,
+  see the [Telethon proxy docs](https://docs.telethon.dev/en/stable/basic/signing-in.html#signing-in-behind-a-proxy).
+- **First `uv run` is slow**: `uv` resolves and builds the project virtualenv
+  on first launch. If your client enforces a short startup timeout, run
+  `uv sync --project ./telegram/mcp_server` once beforehand.
+
+---
+
+## Using with Agent Plugins clients
+
+The installable package is the `telegram/` directory. It ships two manifest
+sets side by side, so the same directory loads in Codex and in any client that
+implements the portable [Agent Plugins 1.0.0](https://agent-plugins.org/specification)
+format:
+
+| File | Consumer | Purpose |
+| --- | --- | --- |
+| `plugin.json` | Agent Plugins clients | Portable manifest (`$schema` = `https://agent-plugins.org/schemas/1.0.0/plugin.schema.json`, closed field set) |
+| `mcp.json` | Agent Plugins clients | Portable MCP config (`stdio` server launched via `uv`, `${PLUGIN_ROOT}`/`${PLUGIN_DATA}` placeholders) |
+| `skills/<name>/SKILL.md` | Both | Agent Skills, discovered as immediate children of `skills/` by both formats |
+| `.codex-plugin/plugin.json` | Codex | Codex-native manifest, including marketplace `interface` metadata (display name, logo, screenshots, prompts) |
+| `.mcp.json` | Codex | Codex-native MCP config, including Codex-only fields (`env_vars` passthrough allowlist, `startup_timeout_sec`, `tool_timeout_sec`) |
+
+Notes on the split:
+
+- Codex does not currently document an Agent Plugins `extensions` namespace,
+  so its UI/marketplace metadata stays in `.codex-plugin/plugin.json` instead
+  of being duplicated under an invented `extensions` key. If Codex publishes a
+  reverse-domain namespace later, that metadata can move into the portable
+  manifest's `extensions` field.
+- The portable `mcp.json` declares no secret values. Telegram credentials come
+  from the login wizard (keyring / encrypted session file), not from the
+  package. The `TG_API_ID`-style environment overrides listed below reach the
+  server through Codex's `env_vars` passthrough; other clients control their
+  own base subprocess environment, and the server works without them once you
+  have logged in.
+- The portable config sets `UV_PROJECT_ENVIRONMENT=${PLUGIN_DATA}/uv-env` so
+  `uv` builds the virtualenv in the client-managed writable data directory
+  instead of inside the (possibly read-only) installed package.
+- Shared metadata (`name`, `version`, `author`, `license`, ...) must stay
+  identical across `plugin.json` and `.codex-plugin/plugin.json`, and the two
+  MCP configs must launch the same server command. The test suite enforces
+  this (`tests/telegram_mcp/test_plugin_structure.py`), and also validates the
+  portable files against the vendored Agent Plugins 1.0.0 schemas.
+
+An Agent Plugins client loads the package by reading root `plugin.json`,
+discovering skills under `skills/`, and starting `telegram_personal` from root
+`mcp.json`. Codex keeps using `.codex-plugin/plugin.json` and `.mcp.json`
+exactly as before; nothing about the Codex install flow changed.
+
+---
+
 ## Useful commands
 
 ### Repo checkout flow
@@ -312,7 +447,7 @@ uv run --project ./telegram/mcp_server codex-telegram logout
 cd telegram/mcp_server && uv run pytest
 ```
 
-### Installed-bundle flow
+### Installed-bundle flow (Codex)
 
 ```bash
 uv run --project "$(
@@ -325,19 +460,6 @@ print(max(candidates, key=lambda p: p.stat().st_mtime))
 PY
 )" codex-telegram whoami
 ```
-
-## Bundled skills
-
-Codex registers the skills under the plugin namespace:
-
-- `telegram:telegram-login`
-- `telegram:telegram-summarize`
-- `telegram:telegram-triage-unread`
-- `telegram:telegram-search`
-- `telegram:telegram-aggregate`
-- `telegram:telegram-media-inspect`
-- `telegram:telegram-send`
-- `telegram:telegram-manage-groups`
 
 ## How sessions are stored
 
@@ -380,6 +502,9 @@ Do not pass the master key as a CLI flag. It ends up in shell history and `ps`.
 | `CODEX_TELEGRAM_UPLOAD_DIR`        | Upload sandbox for `send_*` and `set_profile_photo`. Files outside this directory require `allow_arbitrary_path=True`.                        |
 | `CODEX_TELEGRAM_CONFIG_DIR`        | Optional: overrides the config directory that stores the encrypted session file (default `~/.config/codex-telegram`).                         |
 | `CODEX_TELEGRAM_MEDIA_SCRIPTS_DIR` | Optional: overrides the directory containing the `telegram-media-inspect` scripts used by `inspect_message_media`.                            |
+| `TELEGRAM_MTPROXY_HOST`            | Optional: MTProxy hostname for networks that block direct MTProto. All three `TELEGRAM_MTPROXY_*` vars must be set together.                   |
+| `TELEGRAM_MTPROXY_PORT`            | Optional: MTProxy port. All three `TELEGRAM_MTPROXY_*` vars must be set together.                                                              |
+| `TELEGRAM_MTPROXY_SECRET`          | Optional: MTProxy secret. Treat it like a credential — env only, never commit it. All three `TELEGRAM_MTPROXY_*` vars must be set together.    |
 | `XDG_CACHE_HOME`                   | Optional (standard XDG var): changes where the local message cache lives (default `~/.cache/codex-telegram/cache.db`).                        |
 
 
@@ -404,17 +529,28 @@ If you want the cache encrypted at rest, install `pysqlcipher3`, set `CODEX_TELE
 
 Use the `telegram_diagnostics` MCP tool when the plugin may be running from a stale installed bundle, when auth is unclear, or when you want to verify whether the local message cache is encrypted. It returns the package version, plugin root, session-storage state, cache path, cache size, and cache encryption status without requiring a working Telegram login. Pass `include_account=True` if you also want it to attempt an authenticated account check.
 
-### I installed the plugin but `@Telegram` does not show up
+### I installed the plugin but `@Telegram` does not show up (Codex)
 
 Open a fresh Codex thread first. Plugin and skill context can lag in older threads.
 
 ### The plugin page is there, but I am not logged in
 
-Run the login command from Step 4.
+Run the login command from Step 2.
 
 ### `codex-telegram storage` says no session found
 
 You have not completed the login wizard yet, or you logged in under a different environment/user.
+
+### Connections fail or hang on restricted networks
+
+Direct Telegram MTProto (raw TCP to Telegram's data centers) is blocked in
+some hosted agent environments and corporate networks. If `login` or the MCP
+server cannot connect, route through an MTProxy by setting
+`TELEGRAM_MTPROXY_HOST`, `TELEGRAM_MTPROXY_PORT`, and
+`TELEGRAM_MTPROXY_SECRET` together in the environment of both the login
+command and the MCP server. Keep the secret out of committed files. For other
+proxy types (SOCKS5, HTTP), see the
+[Telethon proxy docs](https://docs.telethon.dev/en/stable/basic/signing-in.html#signing-in-behind-a-proxy).
 
 ### `FLOOD_WAIT_X`
 
@@ -424,7 +560,7 @@ Telegram is rate-limiting the action. Short waits retry automatically. Longer wa
 
 Telegram restricted the account for spammy behavior. That is an account-level Telegram restriction, not a plugin crash.
 
-### The plugin MCP server does not appear in `codex mcp list`
+### The plugin MCP server does not appear in `codex mcp list` (Codex)
 
 Do not rely on that alone. Plugin-bundled MCP servers can be present at runtime even if `codex mcp list` is incomplete or another manual MCP server name collides. The stronger checks are:
 
@@ -436,11 +572,11 @@ Do not rely on that alone. Plugin-bundled MCP servers can be present at runtime 
 
 If the OS keyring fails, rerun login and let it prompt, or pre-set `CODEX_TELEGRAM_MASTER_KEY`.
 
-## What Codex sees
+## What your agent sees
 
-When you invoke a Telegram skill or MCP tool, Codex receives raw chat content and metadata from the response payload. That can include message text, sender names, captions, usernames, reactions, and file metadata.
+When you invoke a Telegram skill or MCP tool, your agent receives raw chat content and metadata from the response payload. That can include message text, sender names, captions, usernames, reactions, and file metadata.
 
-If you would not paste the content into a Codex prompt directly, do not summarize or process it through this plugin.
+If you would not paste the content into an agent prompt directly, do not summarize or process it through this plugin.
 
 ## Security / Telegram caveats
 
