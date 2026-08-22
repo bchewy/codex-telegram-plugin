@@ -6,8 +6,8 @@
   "author": {
     "name": "Brian Chew"
   },
-  "homepage": "https://github.com/bchewy/codex-telegram-plugin",
-  "repository": "https://github.com/bchewy/codex-telegram-plugin",
+  "homepage": "https://github.com/bchewy/telegram-agent-plugin",
+  "repository": "https://github.com/bchewy/telegram-agent-plugin",
   "license": "MIT",
   "keywords": ["telegram", "mcp", "messaging"]
 }
